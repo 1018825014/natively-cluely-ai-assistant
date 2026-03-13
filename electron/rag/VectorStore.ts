@@ -1,7 +1,10 @@
 // electron/rag/VectorStore.ts
 // SQLite-based vector storage with native sqlite-vec search (fallback to JS cosine similarity)
+// JS fallback is offloaded to a worker_threads Worker to avoid blocking the Electron main thread.
 
 import Database from 'better-sqlite3';
+import { Worker } from 'worker_threads';
+import path from 'path';
 import { Chunk } from './SemanticChunker';
 
 export interface StoredChunk extends Chunk {
@@ -23,10 +26,97 @@ export interface ScoredChunk extends StoredChunk {
 export class VectorStore {
     private db: Database.Database;
     private useNativeVec: boolean;
+    private worker: Worker | null = null;
+    private requestId = 0;
+    private pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; timer: ReturnType<typeof setTimeout> }>();
+
+    private static readonly WORKER_TIMEOUT_MS = 30_000; // 30s deadman switch
 
     constructor(db: Database.Database) {
         this.db = db;
         this.useNativeVec = this.detectVecSupport();
+    }
+
+    /**
+     * Lazily initialize the worker thread for JS fallback searches.
+     * The worker is reused across all search calls.
+     */
+    private getWorker(): Worker {
+        if (!this.worker) {
+            // Resolve the compiled worker script path (dist-electron output)
+            const workerPath = path.join(__dirname, 'vectorSearchWorker.js');
+            this.worker = new Worker(workerPath);
+
+            this.worker.on('message', (msg: { type: string; requestId: number; data?: any; error?: string }) => {
+                const pending = this.pendingRequests.get(msg.requestId);
+                if (!pending) return;
+                clearTimeout(pending.timer);
+                this.pendingRequests.delete(msg.requestId);
+
+                if (msg.type === 'error') {
+                    pending.reject(new Error(msg.error || 'Worker error'));
+                } else {
+                    pending.resolve(msg.data);
+                }
+            });
+
+            this.worker.on('error', (err) => {
+                console.error('[VectorStore] Worker error:', err);
+                this.rejectAllPending(err);
+            });
+
+            this.worker.on('exit', (code) => {
+                if (code !== 0) {
+                    console.warn(`[VectorStore] Worker exited with code ${code}`);
+                }
+                this.worker = null;
+                this.rejectAllPending(new Error(`Worker exited with code ${code}`));
+            });
+        }
+        return this.worker;
+    }
+
+    /**
+     * Reject all pending requests (used on worker crash or exit).
+     */
+    private rejectAllPending(err: Error): void {
+        for (const [id, pending] of this.pendingRequests) {
+            clearTimeout(pending.timer);
+            pending.reject(err);
+        }
+        this.pendingRequests.clear();
+    }
+
+    /**
+     * Send a message to the worker with Transferable buffers.
+     * Returns a Promise with a timeout deadman switch.
+     */
+    private postToWorker<T>(message: any, transferList: ArrayBuffer[] = []): Promise<T> {
+        // Safe requestId wrap-around
+        this.requestId = (this.requestId + 1) % Number.MAX_SAFE_INTEGER;
+        const id = this.requestId;
+        message.requestId = id;
+
+        return new Promise<T>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pendingRequests.delete(id);
+                reject(new Error(`[VectorStore] Worker request ${id} timed out after ${VectorStore.WORKER_TIMEOUT_MS}ms`));
+            }, VectorStore.WORKER_TIMEOUT_MS);
+
+            this.pendingRequests.set(id, { resolve, reject, timer });
+            this.getWorker().postMessage(message, transferList);
+        });
+    }
+
+    /**
+     * Terminate the worker thread. Call this when the VectorStore is no longer needed.
+     */
+    async destroy(): Promise<void> {
+        if (this.worker) {
+            await this.worker.terminate();
+            this.worker = null;
+        }
+        this.rejectAllPending(new Error('VectorStore destroyed'));
     }
 
     /**
@@ -103,7 +193,7 @@ export class VectorStore {
             ORDER BY chunk_index ASC
         `).all(meetingId) as any[];
 
-        return rows.map(this.rowToChunk);
+        return rows.map(r => this.rowToChunk(r));
     }
 
     /**
@@ -116,43 +206,45 @@ export class VectorStore {
             ORDER BY chunk_index ASC
         `).all(meetingId) as any[];
 
-        return rows.map(this.rowToChunk);
+        return rows.map(r => this.rowToChunk(r));
     }
 
     /**
-     * Search for similar chunks using native sqlite-vec or JS fallback
+     * Search for similar chunks using native sqlite-vec or JS fallback (worker thread)
      */
-    searchSimilar(
+    async searchSimilar(
         queryEmbedding: number[],
         options: {
             meetingId?: string;
             limit?: number;
             minSimilarity?: number;
+            providerName?: string;
         } = {}
-    ): ScoredChunk[] {
-        const { meetingId, limit = 8, minSimilarity = 0.25 } = options;
+    ): Promise<ScoredChunk[]> {
+        const { meetingId, limit = 8, minSimilarity = 0.25, providerName } = options;
 
         if (this.useNativeVec) {
-            return this.searchSimilarNative(queryEmbedding, meetingId, limit, minSimilarity);
+            return this.searchSimilarNative(queryEmbedding, meetingId, limit, minSimilarity, providerName);
         }
-        return this.searchSimilarJS(queryEmbedding, meetingId, limit, minSimilarity);
+        return this.searchSimilarJSWorker(queryEmbedding, meetingId, limit, minSimilarity, providerName);
     }
 
     /**
      * Native vec0 search — pushes similarity math into SQLite's C layer
      */
-    private searchSimilarNative(
+    private async searchSimilarNative(
         queryEmbedding: number[],
         meetingId: string | undefined,
         limit: number,
-        minSimilarity: number
-    ): ScoredChunk[] {
+        minSimilarity: number,
+        providerName?: string
+    ): Promise<ScoredChunk[]> {
         const queryBlob = this.embeddingToBlob(queryEmbedding);
 
         try {
             // Fetch top-K from vec0, then join with chunks for metadata
-            // We fetch more than limit to allow post-filtering by meetingId and minSimilarity
-            const fetchLimit = meetingId ? limit * 4 : limit;
+            // We fetch more than limit to allow post-filtering by meetingId, minSimilarity, and provider
+            const fetchLimit = (meetingId || providerName) ? limit * 4 : limit;
 
             const vecRows = this.db.prepare(`
                 SELECT chunk_id, distance
@@ -168,12 +260,21 @@ export class VectorStore {
             const chunkIds = vecRows.map(r => r.chunk_id);
             const placeholders = chunkIds.map(() => '?').join(',');
 
-            let chunkQuery = `SELECT * FROM chunks WHERE id IN (${placeholders})`;
+            let chunkQuery = `
+                SELECT c.* 
+                FROM chunks c
+                JOIN meetings m ON c.meeting_id = m.id
+                WHERE c.id IN (${placeholders})
+            `;
             const params: any[] = [...chunkIds];
 
             if (meetingId) {
-                chunkQuery += ' AND meeting_id = ?';
+                chunkQuery += ' AND c.meeting_id = ?';
                 params.push(meetingId);
+            }
+            if (providerName) {
+                chunkQuery += ' AND m.embedding_provider = ?';
+                params.push(providerName);
             }
 
             const chunkRows = this.db.prepare(chunkQuery).all(...params) as any[];
@@ -188,10 +289,9 @@ export class VectorStore {
             const scored: ScoredChunk[] = [];
             for (const vecRow of vecRows) {
                 const chunkData = chunkMap.get(vecRow.chunk_id);
-                if (!chunkData) continue; // Filtered out by meetingId
+                if (!chunkData) continue;
 
-                const similarity = 1 - vecRow.distance; // cosine distance → similarity
-
+                const similarity = 1 - vecRow.distance;
                 if (similarity >= minSimilarity) {
                     scored.push({
                         ...this.rowToChunk(chunkData),
@@ -205,45 +305,85 @@ export class VectorStore {
 
         } catch (e) {
             console.error('[VectorStore] Native vec search failed, falling back to JS:', e);
-            return this.searchSimilarJS(queryEmbedding, meetingId, limit, minSimilarity);
+            return this.searchSimilarJSWorker(queryEmbedding, meetingId, limit, minSimilarity, providerName);
         }
     }
 
     /**
-     * JS fallback — original O(N) cosine similarity for when sqlite-vec is unavailable
+     * JS fallback — Offloaded to worker thread for performance
      */
-    private searchSimilarJS(
+    private async searchSimilarJSWorker(
         queryEmbedding: number[],
         meetingId: string | undefined,
         limit: number,
-        minSimilarity: number
-    ): ScoredChunk[] {
-        let query = 'SELECT * FROM chunks WHERE embedding IS NOT NULL';
+        minSimilarity: number,
+        providerName?: string
+    ): Promise<ScoredChunk[]> {
+        let query = `
+            SELECT c.* 
+            FROM chunks c
+            JOIN meetings m ON c.meeting_id = m.id
+            WHERE c.embedding IS NOT NULL
+        `;
         const params: any[] = [];
 
         if (meetingId) {
-            query += ' AND meeting_id = ?';
+            query += ' AND c.meeting_id = ?';
             params.push(meetingId);
+        }
+        if (providerName) {
+            query += ' AND m.embedding_provider = ?';
+            params.push(providerName);
         }
 
         const rows = this.db.prepare(query).all(...params) as any[];
-        const scored: ScoredChunk[] = [];
+        if (rows.length === 0) return [];
 
-        for (const row of rows) {
-            const chunkEmbedding = this.blobToEmbedding(row.embedding);
-            const similarity = this.cosineSimilarity(queryEmbedding, chunkEmbedding);
+        const dim = queryEmbedding.length;
+        const expectedByteLength = dim * 4; // Float32 = 4 bytes
 
-            if (similarity >= minSimilarity) {
-                scored.push({
-                    ...this.rowToChunk(row),
-                    embedding: chunkEmbedding,
-                    similarity
-                });
+        const rowsWithEmbeddingBuffer = rows
+            .filter(r => r.embedding)
+            .map(r => ({ ...r, buffer: r.embedding as Buffer }))
+            .filter(r => r.buffer.byteLength === expectedByteLength); // Drop chunks from providers with different dimensions
+
+        if (rowsWithEmbeddingBuffer.length === 0) return [];
+
+        // Pack all embeddings into a single flat Float32Array for zero-copy transfer
+        const flatEmbeddings = new Float32Array(rowsWithEmbeddingBuffer.length * dim);
+        for (let i = 0; i < rowsWithEmbeddingBuffer.length; i++) {
+            const blob = rowsWithEmbeddingBuffer[i].buffer;
+            for (let j = 0; j < dim; j++) {
+                flatEmbeddings[i * dim + j] = blob.readFloatLE(j * 4);
             }
         }
 
-        scored.sort((a, b) => b.similarity - a.similarity);
-        return scored.slice(0, limit);
+        const rowMeta = rowsWithEmbeddingBuffer.map(r => ({
+            id: r.id,
+            meeting_id: r.meeting_id,
+            chunk_index: r.chunk_index,
+            speaker: r.speaker,
+            start_timestamp_ms: r.start_timestamp_ms,
+            end_timestamp_ms: r.end_timestamp_ms,
+            cleaned_text: r.cleaned_text,
+            token_count: r.token_count
+        }));
+
+        try {
+            return await this.postToWorker<ScoredChunk[]>({
+                type: 'searchChunks',
+                queryEmbedding: new Float32Array(queryEmbedding),
+                rowCount: rowsWithEmbeddingBuffer.length,
+                embeddingDim: dim,
+                embeddings: flatEmbeddings,
+                rowMeta,
+                minSimilarity,
+                limit
+            }, [flatEmbeddings.buffer]); // Transfer buffer to avoid copy
+        } catch (e) {
+            console.error('[VectorStore] JS worker search failed:', e);
+            throw e;
+        }
     }
 
     /**
@@ -327,42 +467,56 @@ export class VectorStore {
     /**
      * Search summaries for global queries using native vec0 or JS fallback
      */
-    searchSummaries(
+    async searchSummaries(
         queryEmbedding: number[],
-        limit: number = 5
-    ): { meetingId: string; summaryText: string; similarity: number }[] {
+        limit: number = 5,
+        providerName?: string
+    ): Promise<{ meetingId: string; summaryText: string; similarity: number }[]> {
         if (this.useNativeVec) {
-            return this.searchSummariesNative(queryEmbedding, limit);
+            return this.searchSummariesNative(queryEmbedding, limit, providerName);
         }
-        return this.searchSummariesJS(queryEmbedding, limit);
+        return this.searchSummariesJSWorker(queryEmbedding, limit, providerName);
     }
 
     /**
      * Native vec0 summary search
      */
-    private searchSummariesNative(
+    private async searchSummariesNative(
         queryEmbedding: number[],
-        limit: number
-    ): { meetingId: string; summaryText: string; similarity: number }[] {
+        limit: number,
+        providerName?: string
+    ): Promise<{ meetingId: string; summaryText: string; similarity: number }[]> {
         const queryBlob = this.embeddingToBlob(queryEmbedding);
 
         try {
+            const fetchLimit = providerName ? limit * 4 : limit;
             const vecRows = this.db.prepare(`
                 SELECT summary_id, distance
                 FROM vec_summaries
                 WHERE embedding MATCH ?
                 ORDER BY distance
                 LIMIT ?
-            `).all(queryBlob, limit) as any[];
+            `).all(queryBlob, fetchLimit) as any[];
 
             if (vecRows.length === 0) return [];
 
             const ids = vecRows.map(r => r.summary_id);
             const placeholders = ids.map(() => '?').join(',');
 
-            const summaryRows = this.db.prepare(
-                `SELECT * FROM chunk_summaries WHERE id IN (${placeholders})`
-            ).all(...ids) as any[];
+            let summaryQuery = `
+                SELECT s.* 
+                FROM chunk_summaries s
+                JOIN meetings m ON s.meeting_id = m.id
+                WHERE s.id IN (${placeholders})
+            `;
+            const params: any[] = [...ids];
+
+            if (providerName) {
+                summaryQuery += ' AND m.embedding_provider = ?';
+                params.push(providerName);
+            }
+
+            const summaryRows = this.db.prepare(summaryQuery).all(...params) as any[];
 
             const summaryMap = new Map<number, any>();
             for (const row of summaryRows) {
@@ -381,41 +535,135 @@ export class VectorStore {
                 });
             }
 
-            return results;
+            return results.slice(0, limit);
 
         } catch (e) {
             console.error('[VectorStore] Native summary search failed, falling back to JS:', e);
-            return this.searchSummariesJS(queryEmbedding, limit);
+            return this.searchSummariesJSWorker(queryEmbedding, limit, providerName);
         }
     }
 
     /**
-     * JS fallback summary search
+     * JS fallback summary search (Worker)
      */
-    private searchSummariesJS(
+    private async searchSummariesJSWorker(
         queryEmbedding: number[],
-        limit: number
-    ): { meetingId: string; summaryText: string; similarity: number }[] {
-        const rows = this.db.prepare(`
-            SELECT * FROM chunk_summaries WHERE embedding IS NOT NULL
-        `).all() as any[];
-
-        const scored: { meetingId: string; summaryText: string; similarity: number }[] = [];
-
-        for (const row of rows) {
-            const summaryEmbedding = this.blobToEmbedding(row.embedding);
-            const similarity = this.cosineSimilarity(queryEmbedding, summaryEmbedding);
-
-            scored.push({
-                meetingId: row.meeting_id,
-                summaryText: row.summary_text,
-                similarity
-            });
+        limit: number,
+        providerName?: string
+    ): Promise<{ meetingId: string; summaryText: string; similarity: number }[]> {
+        let query = `
+            SELECT s.* 
+            FROM chunk_summaries s
+            JOIN meetings m ON s.meeting_id = m.id
+            WHERE s.embedding IS NOT NULL
+        `;
+        const params: any[] = [];
+        
+        if (providerName) {
+            query += ' AND m.embedding_provider = ?';
+            params.push(providerName);
         }
 
-        scored.sort((a, b) => b.similarity - a.similarity);
-        return scored.slice(0, limit);
+        const rows = this.db.prepare(query).all(...params) as any[];
+
+        const dim = queryEmbedding.length;
+        const expectedByteLength = dim * 4;
+
+        const rowsWithEmbeddingBuffer = rows
+            .filter(r => r.embedding)
+            .map(r => ({ ...r, buffer: r.embedding as Buffer }))
+            .filter(r => r.buffer.byteLength === expectedByteLength);
+
+        if (rowsWithEmbeddingBuffer.length === 0) return [];
+
+        const flatEmbeddings = new Float32Array(rowsWithEmbeddingBuffer.length * dim);
+        for (let i = 0; i < rowsWithEmbeddingBuffer.length; i++) {
+            const blob = rowsWithEmbeddingBuffer[i].buffer;
+            for (let j = 0; j < dim; j++) {
+                flatEmbeddings[i * dim + j] = blob.readFloatLE(j * 4);
+            }
+        }
+
+        const rowMeta = rowsWithEmbeddingBuffer.map(r => ({
+            id: r.id,
+            meeting_id: r.meeting_id,
+            summary_text: r.summary_text
+        }));
+
+        try {
+            return await this.postToWorker<{ meetingId: string; summaryText: string; similarity: number }[]>({
+                type: 'searchSummaries',
+                queryEmbedding: new Float32Array(queryEmbedding),
+                rowCount: rowsWithEmbeddingBuffer.length,
+                embeddingDim: dim,
+                embeddings: flatEmbeddings,
+                rowMeta,
+                limit
+            }, [flatEmbeddings.buffer]);
+        } catch (e) {
+             console.error('[VectorStore] JS worker summary search failed:', e);
+             throw e;
+        }
     }
+
+    // ============================================
+    // Re-indexing Utilities
+    // ============================================
+
+    /**
+     * Get count of meetings with incompatible embeddings
+     */
+    getIncompatibleMeetingsCount(providerName: string): number {
+        const row = this.db.prepare(`
+            SELECT COUNT(*) as count FROM meetings 
+            WHERE embedding_provider IS NOT NULL 
+            AND embedding_provider != ?
+            AND is_processed = 1
+        `).get(providerName) as any;
+
+        return row.count || 0;
+    }
+
+    /**
+     * Delete embeddings for meetings to prep for re-indexer
+     */
+    deleteEmbeddingsForMeetings(providerName: string): string[] {
+        // Find incompatible meetings
+        const rows = this.db.prepare(`
+            SELECT id FROM meetings 
+            WHERE embedding_provider IS NOT NULL 
+            AND embedding_provider != ?
+            AND is_processed = 1
+        `).all(providerName) as any[];
+
+        const meetingIds = rows.map(r => r.id);
+        if (meetingIds.length === 0) return [];
+
+        for (const id of meetingIds) {
+            // Nullify embeddings
+            this.db.prepare('UPDATE chunks SET embedding = NULL WHERE meeting_id = ?').run(id);
+            this.db.prepare('UPDATE chunk_summaries SET embedding = NULL WHERE meeting_id = ?').run(id);
+            this.db.prepare('UPDATE meetings SET embedding_provider = NULL, embedding_dimensions = NULL WHERE id = ?').run(id);
+
+            // Delete from vec0 tables
+            if (this.useNativeVec) {
+                try {
+                    const cIds = this.db.prepare('SELECT id FROM chunks WHERE meeting_id = ?').all(id) as any[];
+                    if (cIds.length > 0) {
+                        const placeholders = cIds.map(() => '?').join(',');
+                        this.db.prepare(`DELETE FROM vec_chunks WHERE chunk_id IN (${placeholders})`).run(...cIds.map(r => r.id));
+                    }
+
+                    const sIds = this.db.prepare('SELECT id FROM chunk_summaries WHERE meeting_id = ?').get(id) as any;
+                    if (sIds) {
+                         this.db.prepare(`DELETE FROM vec_summaries WHERE summary_id = ?`).run(sIds.id);
+                    }
+                } catch (e) {}
+            }
+        }
+        return meetingIds;
+    }
+
 
     // ============================================
     // Private Helpers
@@ -431,7 +679,7 @@ export class VectorStore {
             endMs: row.end_timestamp_ms,
             text: row.cleaned_text,
             tokenCount: row.token_count,
-            embedding: row.embedding ? this.blobToEmbedding(row.embedding) : undefined
+            embedding: undefined // Explicitly avoiding buffer parsing unless needed
         };
     }
 
@@ -446,34 +694,4 @@ export class VectorStore {
         return buffer;
     }
 
-    /**
-     * Convert binary BLOB back to embedding array
-     */
-    private blobToEmbedding(blob: Buffer): number[] {
-        const embedding: number[] = [];
-        for (let i = 0; i < blob.length; i += 4) {
-            embedding.push(blob.readFloatLE(i));
-        }
-        return embedding;
-    }
-
-    /**
-     * Compute cosine similarity between two vectors (JS fallback only)
-     */
-    private cosineSimilarity(a: number[], b: number[]): number {
-        if (a.length !== b.length) return 0;
-
-        let dotProduct = 0;
-        let normA = 0;
-        let normB = 0;
-
-        for (let i = 0; i < a.length; i++) {
-            dotProduct += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-        return magnitude === 0 ? 0 : dotProduct / magnitude;
-    }
 }
