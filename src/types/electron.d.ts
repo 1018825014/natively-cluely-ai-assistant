@@ -165,6 +165,18 @@ export interface ElectronAPI {
   saveCustomProvider: (provider: any) => Promise<{ success: boolean; id?: string; error?: string }>;
   getCustomProviders: () => Promise<any[]>;
   deleteCustomProvider: (id: string) => Promise<{ success: boolean; error?: string }>;
+  testCustomProviderConnection: (provider: any) => Promise<{
+    success: boolean;
+    error?: string;
+    preview?: {
+      requestUrl?: string;
+      method?: string;
+      status?: number;
+      responsePath?: string;
+      extractedResponse?: string;
+      rawResponse?: string;
+    };
+  }>;
 
   // Follow-up Email
   generateFollowupEmail: (input: any) => Promise<string>;

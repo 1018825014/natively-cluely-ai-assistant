@@ -37,7 +37,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
         <div className="text-xs text-white/90 backdrop-blur-md bg-black/60 rounded-lg py-2 px-4 flex items-center justify-center gap-4">
           {/* Show/Hide */}
           <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-[11px] leading-none">Show/Hide</span>
+            <span className="text-[11px] leading-none">显示/隐藏</span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                 ⌘
@@ -52,8 +52,8 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
           <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="text-[11px] leading-none truncate">
               {extraScreenshots.length === 0
-                ? "Screenshot your code"
-                : "Screenshot"}
+                ? "截图代码"
+                : "截图"}
             </span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
@@ -66,7 +66,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
           </div>
           {extraScreenshots.length > 0 && (
             <div className="flex items-center gap-2 whitespace-nowrap">
-              <span className="text-[11px] leading-none">Debug</span>
+              <span className="text-[11px] leading-none">调试</span>
               <div className="flex gap-1">
                 <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                   ⌘
@@ -80,7 +80,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
 
           {/* Start Over */}
           <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-[11px] leading-none">Start over</span>
+            <span className="text-[11px] leading-none">重新开始</span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                 ⌘
@@ -113,14 +113,14 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                   {/* Tooltip content */}
                   <div className="space-y-4">
                     <h3 className="font-medium whitespace-nowrap">
-                      Keyboard Shortcuts
+                      键盘快捷键
                     </h3>
                     <div className="space-y-3">
                       {/* Toggle Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="whitespace-nowrap">
-                            Toggle Window
+                            切换窗口
                           </span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
@@ -132,14 +132,14 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Show or hide this window.
+                          显示或隐藏这个窗口。
                         </p>
                       </div>
                       {/* Screenshot Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="whitespace-nowrap">
-                            Take Screenshot
+                            截图
                           </span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
@@ -151,15 +151,13 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Capture additional parts of the question or your
-                          solution for debugging help. Up to 5 extra screenshots
-                          are saved.
+                          可额外截图保存题目的其他部分或你的解法，便于进一步分析。最多保留 5 张附加截图。
                         </p>
                       </div>
                       {/* Debug Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
-                          <span className="whitespace-nowrap">Debug</span>
+                          <span className="whitespace-nowrap">调试</span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                               ⌘
@@ -170,14 +168,13 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Generate new solutions based on all previous and newly
-                          added screenshots.
+                          结合之前和新添加的截图重新生成解答。
                         </p>
                       </div>
                       {/* Start Over Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
-                          <span className="whitespace-nowrap">Start Over</span>
+                          <span className="whitespace-nowrap">重新开始</span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                               ⌘
@@ -188,7 +185,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Start fresh with a new question.
+                          用一个新问题重新开始。
                         </p>
                       </div>
                     </div>
@@ -201,7 +198,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
           {/* Sign Out Button */}
           <button
             className="text-red-500/70 hover:text-red-500/90 transition-colors"
-            title="Sign Out"
+            title="退出应用"
             onClick={() => window.electronAPI.quitApp()}
           >
             <IoLogOutOutline className="w-4 h-4" />

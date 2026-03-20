@@ -7,6 +7,8 @@ import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manag
 import * as path from "path";
 import * as fs from "fs";
 import { AudioDevices } from "./audio/AudioDevices";
+import curl2Json from "@bany/curl-to-json";
+import { deepVariableReplacer, getByPath } from "./utils/curlUtils";
 
 import { RECOGNITION_LANGUAGES, AI_RESPONSE_LANGUAGES } from "./config/languages"
 
@@ -14,6 +16,307 @@ export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, listener);
+  };
+
+  const extractTextFromCustomProviderResponse = (data: any, fallbackToJson: boolean = true): string => {
+    if (!data) return "";
+    if (typeof data === 'string') return data;
+    if (typeof data.response === 'string') return data.response;
+    if (data.choices?.[0]?.message?.content) return data.choices[0].message.content;
+    if (data.choices?.[0]?.delta?.content) return data.choices[0].delta.content;
+    if (Array.isArray(data.content) && data.content[0]?.text) return data.content[0].text;
+    if (typeof data.text === 'string') return data.text;
+    if (typeof data.output === 'string') return data.output;
+    if (typeof data.result === 'string') return data.result;
+    return fallbackToJson ? JSON.stringify(data) : "";
+  };
+
+  const extractTextFromCustomProviderPayload = (data: any, responsePath?: string): string => {
+    if (responsePath?.trim()) {
+      const extracted = getByPath(data, responsePath.trim());
+      if (typeof extracted === 'string') return extracted;
+      if (extracted !== undefined && extracted !== null) return JSON.stringify(extracted, null, 2);
+      return "";
+    }
+
+    return extractTextFromCustomProviderResponse(data);
+  };
+
+  const extractStreamingTextFromCustomProviderPayload = (data: any, responsePath?: string): string => {
+    if (responsePath?.trim()) {
+      const extracted = getByPath(data, responsePath.trim());
+      if (typeof extracted === 'string') return extracted;
+      if (typeof extracted === 'number' || typeof extracted === 'boolean') return String(extracted);
+      return "";
+    }
+
+    return extractTextFromCustomProviderResponse(data, false);
+  };
+
+  const splitConcatenatedJsonPayloads = (rawText: string): any[] | null => {
+    const payloads: any[] = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+
+    for (let i = 0; i < rawText.length; i++) {
+      const char = rawText[i];
+
+      if (start === -1) {
+        if (/\s/.test(char)) continue;
+        if (char !== '{' && char !== '[') return null;
+        start = i;
+        depth = 1;
+        inString = false;
+        escaping = false;
+        continue;
+      }
+
+      if (inString) {
+        if (escaping) {
+          escaping = false;
+          continue;
+        }
+
+        if (char === '\\') {
+          escaping = true;
+          continue;
+        }
+
+        if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (char === '{' || char === '[') {
+        depth++;
+        continue;
+      }
+
+      if (char === '}' || char === ']') {
+        depth--;
+
+        if (depth < 0) return null;
+
+        if (depth === 0) {
+          const segment = rawText.slice(start, i + 1).trim();
+          try {
+            payloads.push(JSON.parse(segment));
+          } catch {
+            return null;
+          }
+          start = -1;
+        }
+      }
+    }
+
+    if (inString || escaping || depth !== 0 || start !== -1) {
+      return null;
+    }
+
+    return payloads.length > 1 ? payloads : null;
+  };
+
+  const normalizeCustomProviderPlainTextFragment = (fragment: string): string => {
+    const normalized = fragment
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .map(line => {
+        if (!line || line === '[DONE]' || line === 'data:') return '';
+        if (line.startsWith('event:')) return '';
+        if (line.startsWith('data:')) {
+          const rest = line.substring(5).trim();
+          if (!rest || rest === '[DONE]') return '';
+          return rest;
+        }
+        return line;
+      })
+      .filter(Boolean)
+      .join('\n');
+
+    return normalized.trim();
+  };
+
+  const parseCustomProviderSequence = (rawText: string, responsePath?: string): { data: any[]; extractedText: string } | null => {
+    const parts: Array<{ type: 'text'; value: string } | { type: 'payload'; value: any }> = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+    let textBuffer = '';
+
+    const flushTextBuffer = () => {
+      const normalized = normalizeCustomProviderPlainTextFragment(textBuffer);
+      if (normalized) {
+        parts.push({ type: 'text', value: normalized });
+      }
+      textBuffer = '';
+    };
+
+    for (let i = 0; i < rawText.length; i++) {
+      const char = rawText[i];
+
+      if (start === -1) {
+        if (char === '{' || char === '[') {
+          flushTextBuffer();
+          start = i;
+          depth = 1;
+          inString = false;
+          escaping = false;
+          continue;
+        }
+
+        textBuffer += char;
+        continue;
+      }
+
+      if (inString) {
+        if (escaping) {
+          escaping = false;
+          continue;
+        }
+
+        if (char === '\\') {
+          escaping = true;
+          continue;
+        }
+
+        if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (char === '{' || char === '[') {
+        depth++;
+        continue;
+      }
+
+      if (char === '}' || char === ']') {
+        depth--;
+
+        if (depth < 0) return null;
+
+        if (depth === 0) {
+          const segment = rawText.slice(start, i + 1).trim();
+          try {
+            parts.push({ type: 'payload', value: JSON.parse(segment) });
+          } catch {
+            return null;
+          }
+          start = -1;
+        }
+      }
+    }
+
+    if (inString || escaping || depth !== 0 || start !== -1) {
+      return null;
+    }
+
+    flushTextBuffer();
+
+    const payloads = parts
+      .filter((part): part is { type: 'payload'; value: any } => part.type === 'payload')
+      .map(part => part.value);
+
+    if (payloads.length === 0) {
+      return null;
+    }
+
+    return {
+      data: payloads,
+      extractedText: parts
+        .map(part => part.type === 'text'
+          ? part.value
+          : extractStreamingTextFromCustomProviderPayload(part.value, responsePath))
+        .filter(Boolean)
+        .join('')
+    };
+  };
+
+  const parseCustomProviderRawResponse = (rawText: string, responsePath?: string): { data: any; extractedText: string } => {
+    const trimmed = rawText.trim();
+    if (!trimmed) return { data: {}, extractedText: "" };
+
+    const lines = trimmed.split(/\r?\n/);
+    const structuredPayloads: any[] = [];
+    const structuredTexts: string[] = [];
+    let sawStructured = false;
+
+    for (const line of lines) {
+      const current = line.trim();
+      if (current.startsWith('data:')) {
+        if (current === 'data: [DONE]') {
+          sawStructured = true;
+          continue;
+        }
+
+        try {
+          const payload = JSON.parse(current.substring(5).trim());
+          sawStructured = true;
+          structuredPayloads.push(payload);
+          const extracted = extractStreamingTextFromCustomProviderPayload(payload, responsePath);
+          if (extracted) structuredTexts.push(extracted);
+          continue;
+        } catch {
+          // Fall through to sequence parsing below for mixed lines.
+        }
+      }
+
+      const sequenced = parseCustomProviderSequence(line, responsePath);
+      if (sequenced) {
+        sawStructured = true;
+        structuredPayloads.push(...sequenced.data);
+        if (sequenced.extractedText) structuredTexts.push(sequenced.extractedText);
+      }
+    }
+
+    if (sawStructured) {
+      return {
+        data: structuredPayloads.length > 0 ? structuredPayloads : trimmed,
+        extractedText: structuredTexts.join('')
+      };
+    }
+
+    try {
+      const data = JSON.parse(trimmed);
+      return {
+        data,
+        extractedText: extractTextFromCustomProviderPayload(data, responsePath)
+      };
+    } catch {
+      const sequenced = parseCustomProviderSequence(trimmed, responsePath);
+      if (sequenced) {
+        return sequenced;
+      }
+
+      return {
+        data: trimmed,
+        extractedText: trimmed
+      };
+    }
+  };
+
+  const toPreviewString = (value: any): string => {
+    if (value === undefined) return "";
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
   };
 
   // --- NEW Test Helper ---
@@ -726,10 +1029,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle("delete-curl-provider", async (_, id: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().deleteCurlProvider(id);
-      return { success: true };
+      try {
+        const { CredentialsManager } = require('./services/CredentialsManager');
+        CredentialsManager.getInstance().deleteCurlProvider(id);
+        return { success: true };
     } catch (error: any) {
       console.error("Error deleting curl provider:", error);
       return { success: false, error: error.message };
@@ -752,9 +1055,129 @@ export function initializeIpcHandlers(appState: AppState): void {
       appState.getIntelligenceManager().initializeLLMs();
 
       return { success: true };
+      } catch (error: any) {
+        console.error("Error switching to curl provider:", error);
+        return { success: false, error: error.message };
+      }
+    });
+
+  safeHandle("test-custom-provider-connection", async (_, provider: { name?: string; curlCommand?: string; responsePath?: string }) => {
+    console.log(`[IPC] Received test-custom-provider-connection request for provider: ${provider?.name || 'Unnamed Provider'}`);
+    try {
+      if (!provider?.curlCommand || !provider.curlCommand.trim()) {
+        return { success: false, error: 'No cURL command provided' };
+      }
+
+      const requestConfig = curl2Json(provider.curlCommand);
+      const method = (requestConfig.method || 'POST').toUpperCase();
+      const testPrompt = "Return exactly the word OK. This is a connection test.";
+      const variables = {
+        TEXT: testPrompt,
+        PROMPT: testPrompt,
+        SYSTEM_PROMPT: "You are a connection test assistant. Reply with OK.",
+        USER_MESSAGE: "Return exactly OK.",
+        CONTEXT: "This request is only checking whether the provider can be reached successfully.",
+        IMAGE_BASE64: "",
+      };
+
+      const url = deepVariableReplacer(requestConfig.url, variables);
+      const headers = deepVariableReplacer(requestConfig.header || {}, variables);
+      const body = deepVariableReplacer(requestConfig.data || {}, variables);
+      const requestInit: RequestInit = {
+        method,
+        headers,
+      };
+
+      if (!['GET', 'HEAD'].includes(method)) {
+        const hasBody =
+          body !== undefined &&
+          body !== null &&
+          !(typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0);
+
+        if (hasBody) {
+          requestInit.body = typeof body === 'string' ? body : JSON.stringify(body);
+        }
+      }
+
+      const response = await fetch(url, requestInit);
+      const rawText = await response.text();
+
+      const { data, extractedText } = parseCustomProviderRawResponse(rawText, provider.responsePath?.trim());
+
+      if (!response.ok) {
+        const errorPayload = typeof data === 'string' ? data : JSON.stringify(data);
+        throw new Error(`HTTP ${response.status}: ${errorPayload || response.statusText}`);
+      }
+
+      let extractedPreview = "";
+      if (provider.responsePath?.trim()) {
+        const extracted = getByPath(data, provider.responsePath.trim());
+        if (extracted === undefined) {
+          return {
+            success: false,
+            error: `Connected, but responsePath "${provider.responsePath}" did not match the response.`,
+            preview: {
+              requestUrl: url,
+              method,
+              status: response.status,
+              responsePath: provider.responsePath.trim(),
+              rawResponse: toPreviewString(data),
+              extractedResponse: "",
+            },
+          };
+        }
+
+        const normalized = typeof extracted === 'string' ? extracted : JSON.stringify(extracted, null, 2);
+        if (!normalized?.trim()) {
+          return {
+            success: false,
+            error: `Connected, but responsePath "${provider.responsePath}" returned empty content.`,
+            preview: {
+              requestUrl: url,
+              method,
+              status: response.status,
+              responsePath: provider.responsePath.trim(),
+              rawResponse: toPreviewString(data),
+              extractedResponse: normalized,
+            },
+          };
+        }
+        extractedPreview = normalized;
+      } else {
+        const extracted = extractedText;
+        if (!extracted?.trim()) {
+          return {
+            success: false,
+            error: 'Connected, but no usable response text was returned.',
+            preview: {
+              requestUrl: url,
+              method,
+              status: response.status,
+              responsePath: '',
+              rawResponse: toPreviewString(data),
+              extractedResponse: extracted,
+            },
+          };
+        }
+        extractedPreview = extracted;
+      }
+
+      return {
+        success: true,
+        preview: {
+          requestUrl: url,
+          method,
+          status: response.status,
+          responsePath: provider.responsePath?.trim() || '',
+          rawResponse: toPreviewString(data),
+          extractedResponse: extractedPreview,
+        },
+      };
     } catch (error: any) {
-      console.error("Error switching to curl provider:", error);
-      return { success: false, error: error.message };
+      const rawMsg = error?.message || 'Connection failed';
+      const msg = sanitizeErrorMessage(rawMsg);
+      console.error("Custom provider connection test failed:", msg);
+      return { success: false, error: msg };
     }
   });
 
@@ -767,17 +1190,19 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Return masked versions for security (just indicate if set)
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
 
+      const manager = CredentialsManager.getInstance();
+
       return {
         hasGeminiKey: hasKey(creds.geminiApiKey),
         hasGroqKey: hasKey(creds.groqApiKey),
         hasOpenaiKey: hasKey(creds.openaiApiKey),
         hasClaudeKey: hasKey(creds.claudeApiKey),
         googleServiceAccountPath: creds.googleServiceAccountPath || null,
-        sttProvider: creds.sttProvider || 'google',
+        sttProvider: manager.getSttProvider(),
         groqSttModel: creds.groqSttModel || 'whisper-large-v3-turbo',
         hasSttGroqKey: hasKey(creds.groqSttApiKey),
         hasSttOpenaiKey: hasKey(creds.openAiSttApiKey),
-        hasDeepgramKey: hasKey(creds.deepgramApiKey),
+        hasDeepgramKey: hasKey(manager.getDeepgramApiKey()),
         hasElevenLabsKey: hasKey(creds.elevenLabsApiKey),
         hasAzureKey: hasKey(creds.azureApiKey),
         azureRegion: creds.azureRegion || 'eastus',
@@ -981,13 +1406,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("test-stt-connection", async (_, provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => {
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
+      const normalizedApiKey = apiKey.trim();
+
       if (provider === 'deepgram') {
         // Test Deepgram via WebSocket connection
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {
           const url = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&channels=1';
           const ws = new WebSocket(url, {
-            headers: { Authorization: `Token ${apiKey} ` },
+            headers: { Authorization: `Token ${normalizedApiKey}` },
           });
 
           const timeout = setTimeout(() => {
@@ -1023,7 +1450,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           ws.on('open', () => {
             // Send a minimal config to validate the API key
             ws.send(JSON.stringify({
-              api_key: apiKey,
+              api_key: normalizedApiKey,
               model: 'stt-rt-v4',
               audio_format: 'pcm_s16le',
               sample_rate: 16000,
@@ -1080,7 +1507,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // Scoped keys may lack speech_to_text or user_read but still be usable once permissions are added.
         try {
           await axios.get('https://api.elevenlabs.io/v1/voices', {
-            headers: { 'xi-api-key': apiKey },
+            headers: { 'xi-api-key': normalizedApiKey },
             timeout: 10000,
           });
         } catch (elErr: any) {
@@ -1100,7 +1527,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           `https://${azureRegion}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US`,
           testWav,
           {
-            headers: { 'Ocp-Apim-Subscription-Key': apiKey, 'Content-Type': 'audio/wav' },
+            headers: { 'Ocp-Apim-Subscription-Key': normalizedApiKey, 'Content-Type': 'audio/wav' },
             timeout: 15000,
           }
         );
@@ -1112,7 +1539,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           testWav,
           {
             headers: {
-              Authorization: `Basic ${Buffer.from(`apikey:${apiKey}`).toString('base64')}`,
+              Authorization: `Basic ${Buffer.from(`apikey:${normalizedApiKey}`).toString('base64')}`,
               'Content-Type': 'audio/wav',
             },
             timeout: 15000,
@@ -1131,7 +1558,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
         await axios.post(endpoint, form, {
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${normalizedApiKey}`,
             ...form.getHeaders(),
           },
           timeout: 15000,

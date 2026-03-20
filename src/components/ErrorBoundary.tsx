@@ -89,7 +89,7 @@ export class ErrorBoundary extends Component<Props, State> {
                     {context} crashed
                 </h2>
                 <p style={{ margin: 0, fontSize: '12px', color: '#888', maxWidth: '320px', lineHeight: 1.5 }}>
-                    An unexpected error occurred. Your data is safe — click below to recover.
+                    发生了意外错误。你的数据仍然安全，点击下方即可恢复。
                 </p>
                 {this.state.errorMessage && (
                     <code style={{
@@ -118,7 +118,7 @@ export class ErrorBoundary extends Component<Props, State> {
                         }}
                     >
                         <RefreshCw size={13} />
-                        Try to recover
+                        尝试恢复
                     </button>
                     <button
                         onClick={this.handleHardReload}
@@ -130,7 +130,7 @@ export class ErrorBoundary extends Component<Props, State> {
                         }}
                     >
                         <RefreshCw size={13} />
-                        Reload UI
+                        重新加载界面
                     </button>
                 </div>
             </div>

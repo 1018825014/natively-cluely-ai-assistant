@@ -13,6 +13,7 @@ export interface CustomProvider {
     id: string;
     name: string;
     curlCommand: string;
+    responsePath?: string;
 }
 
 export interface CurlProvider {
@@ -108,11 +109,12 @@ export class CredentialsManager {
     }
 
     public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' {
-        return this.credentials.sttProvider || 'google';
+        const envProvider = process.env.NATIVELY_STT_PROVIDER as StoredCredentials['sttProvider'] | undefined;
+        return envProvider || this.credentials.sttProvider || 'google';
     }
 
     public getDeepgramApiKey(): string | undefined {
-        return this.credentials.deepgramApiKey;
+        return process.env.DEEPGRAM_API_KEY || process.env.NATIVELY_DEEPGRAM_API_KEY || this.credentials.deepgramApiKey;
     }
 
     public getGroqSttApiKey(): string | undefined {

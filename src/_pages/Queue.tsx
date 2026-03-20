@@ -53,7 +53,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         return existing
       } catch (error) {
         console.error("Error loading screenshots:", error)
-        showToast("Error", "Failed to load existing screenshots", "error")
+        showToast("错误", "加载已有截图失败。", "error")
         return []
       }
     },
@@ -86,7 +86,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         refetch()
       } else {
         console.error("Failed to delete screenshot:", response.error)
-        showToast("Error", "Failed to delete the screenshot file", "error")
+        showToast("错误", "删除截图文件失败。", "error")
       }
     } catch (error) {
       console.error("Error deleting screenshot:", error)
@@ -216,8 +216,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
         showToast(
-          "Processing Failed",
-          "There was an error processing your screenshots.",
+          "处理失败",
+          "处理截图时出错了。",
           "error"
         )
         setView("queue")
@@ -225,8 +225,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       }),
       window.electronAPI.onProcessingNoScreenshots(() => {
         showToast(
-          "No Screenshots",
-          "There are no screenshots to process.",
+          "没有截图",
+          "当前没有可处理的截图。",
           "neutral"
         )
       })
@@ -253,7 +253,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         if (allPaths.length > 0) {
           // Call the LLM to process all screenshots
           const count = allPaths.length;
-          setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 Analyzing ${count} screenshot${count > 1 ? 's' : ''}...` }]);
+          setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 正在分析${count > 1 ? `${count} 张截图` : "截图"}...` }]);
           setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
 
           await window.electronAPI.streamGeminiChat(
@@ -262,7 +262,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           );
         }
       } catch (err) {
-        setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);
+        setChatMessages((msgs) => [...msgs, { role: "gemini", text: "错误：" + String(err) }]);
         setChatLoading(false);
       }
     });
@@ -336,11 +336,11 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
               <div className="flex-1 overflow-y-auto mb-3 p-3 rounded-lg bg-white/10 backdrop-blur-md max-h-64 min-h-[120px] glass-content border border-white/20 shadow-lg">
                 {chatMessages.length === 0 ? (
                   <div className="text-sm text-gray-600 text-center mt-8">
-                    💬 Chat with {currentModel}
+                    与 {currentModel} 对话
                     <br />
-                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+H) for automatic analysis</span>
+                    <span className="text-xs text-gray-500">截图（Cmd+H）后可自动分析</span>
                     <br />
-                    <span className="text-xs text-gray-500">Click ⚙️ Models to switch AI providers</span>
+                    <span className="text-xs text-gray-500">点击“⚙️ 模型”可切换 AI 提供商</span>
                   </div>
                 ) : (
                   chatMessages.map((msg, idx) => (
@@ -417,7 +417,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                         <span className="animate-pulse text-gray-400">●</span>
                         <span className="animate-pulse animation-delay-200 text-gray-400">●</span>
                         <span className="animate-pulse animation-delay-400 text-gray-400">●</span>
-                        <span className="ml-2">{currentModel} is replying...</span>
+                        <span className="ml-2">{currentModel} 正在回复...</span>
                       </span>
                     </div>
                   </div>
@@ -433,7 +433,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                 <input
                   ref={chatInputRef}
                   className="flex-1 rounded-lg px-3 py-2 bg-white/25 backdrop-blur-md text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:ring-1 focus:ring-gray-400/60 border border-white/40 shadow-lg transition-all duration-200"
-                  placeholder="Type your message..."
+                  placeholder="输入你的消息..."
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   disabled={chatLoading}
@@ -443,7 +443,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                   className="p-2 rounded-lg bg-gray-600/80 hover:bg-gray-700/80 border border-gray-500/60 flex items-center justify-center transition-all duration-200 backdrop-blur-sm shadow-lg disabled:opacity-50"
                   disabled={chatLoading || !chatInput.trim()}
                   tabIndex={-1}
-                  aria-label="Send"
+                  aria-label="发送"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="white" className="w-4 h-4">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 19.5l15-7.5-15-7.5v6l10 1.5-10 1.5v6z" />

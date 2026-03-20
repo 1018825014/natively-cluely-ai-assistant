@@ -1134,7 +1134,8 @@ ANSWER DIRECTLY:`;
     systemPrompt: string,
     rawUserMessage: string,
     context: string,
-    imagePath?: string
+    imagePath?: string,
+    responsePath?: string
   ): Promise<string> {
 
     // 1. Parse cURL to JSON object
@@ -1168,21 +1169,28 @@ ANSWER DIRECTLY:`;
 
     // 5. Execute Fetch
     try {
-      const response = await fetch(url, {
-        method: requestConfig.method || 'POST',
-        headers: headers,
-        body: JSON.stringify(body)
-      });
+      const method = requestConfig.method || 'POST';
+      const requestInit: RequestInit = {
+        method,
+        headers,
+      };
 
-      const data = await response.json();
-      console.log(`[LLMHelper] Custom Provider raw response:`, JSON.stringify(data).substring(0, 1000));
-
-      if (!response.ok) {
-        throw new Error(`Custom Provider HTTP ${response.status}: ${JSON.stringify(data).substring(0, 200)}`);
+      if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
+        requestInit.body = typeof body === 'string' ? body : JSON.stringify(body);
       }
 
-      // 6. Extract Answer - try common response formats
-      const extracted = this.extractFromCommonFormats(data);
+      const response = await fetch(url, requestInit);
+      const rawText = await response.text();
+      const { data, text } = this.parseCustomProviderResponse(rawText, responsePath);
+      console.log(`[LLMHelper] Custom Provider raw response:`, (typeof data === 'string' ? data : JSON.stringify(data)).substring(0, 1000));
+
+      if (!response.ok) {
+        const errorPreview = (typeof data === 'string' ? data : JSON.stringify(data)).substring(0, 200);
+        throw new Error(`Custom Provider HTTP ${response.status}: ${errorPreview}`);
+      }
+
+      // 6. Extract Answer - try configured path first, then common formats
+      const extracted = text;
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
@@ -1195,7 +1203,7 @@ ANSWER DIRECTLY:`;
    * Try to extract text content from common LLM API response formats.
    * Supports: Ollama, OpenAI, Anthropic, and generic formats.
    */
-  private extractFromCommonFormats(data: any): string {
+  private extractFromCommonFormats(data: any, fallbackToJson: boolean = true): string {
     if (!data || typeof data === 'string') return data || "";
 
     // Ollama format: { response: "..." }
@@ -1219,9 +1227,283 @@ ANSWER DIRECTLY:`;
     // Generic result field
     if (typeof data.result === 'string') return data.result;
 
+    if (!fallbackToJson) {
+      return "";
+    }
+
     // Fallback: stringify the whole response
     console.warn("[LLMHelper] Could not extract text from custom provider response, returning raw JSON");
     return JSON.stringify(data);
+  }
+
+  private extractFromCustomProviderPayload(data: any, responsePath?: string): string {
+    if (responsePath?.trim()) {
+      const extracted = getByPath(data, responsePath.trim());
+      if (typeof extracted === 'string') return extracted;
+      if (extracted !== undefined && extracted !== null) return JSON.stringify(extracted);
+    }
+
+    return this.extractFromCommonFormats(data);
+  }
+
+  private extractStreamingTextFromCustomProviderPayload(data: any, responsePath?: string): string {
+    if (responsePath?.trim()) {
+      const extracted = getByPath(data, responsePath.trim());
+      if (typeof extracted === 'string') return extracted;
+      if (typeof extracted === 'number' || typeof extracted === 'boolean') return String(extracted);
+      return "";
+    }
+
+    return this.extractFromCommonFormats(data, false);
+  }
+
+  private splitConcatenatedJsonPayloads(rawText: string): any[] | null {
+    const payloads: any[] = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+
+    for (let i = 0; i < rawText.length; i++) {
+      const char = rawText[i];
+
+      if (start === -1) {
+        if (/\s/.test(char)) continue;
+        if (char !== "{" && char !== "[") return null;
+        start = i;
+        depth = 1;
+        inString = false;
+        escaping = false;
+        continue;
+      }
+
+      if (inString) {
+        if (escaping) {
+          escaping = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escaping = true;
+          continue;
+        }
+
+        if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === "{" || char === "[") {
+        depth++;
+        continue;
+      }
+
+      if (char === "}" || char === "]") {
+        depth--;
+
+        if (depth < 0) return null;
+
+        if (depth === 0) {
+          const segment = rawText.slice(start, i + 1).trim();
+          try {
+            payloads.push(JSON.parse(segment));
+          } catch {
+            return null;
+          }
+          start = -1;
+        }
+      }
+    }
+
+    if (inString || escaping || depth !== 0 || start !== -1) {
+      return null;
+    }
+
+    return payloads.length > 1 ? payloads : null;
+  }
+
+  private normalizeCustomProviderPlainTextFragment(fragment: string): string {
+    const normalized = fragment
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .map(line => {
+        if (!line || line === "[DONE]" || line === "data:") return "";
+        if (line.startsWith("event:")) return "";
+        if (line.startsWith("data:")) {
+          const rest = line.substring(5).trim();
+          if (!rest || rest === "[DONE]") return "";
+          return rest;
+        }
+        return line;
+      })
+      .filter(Boolean)
+      .join("\n");
+
+    return normalized.trim();
+  }
+
+  private parseCustomProviderSequence(rawText: string, responsePath?: string): { data: any[]; text: string } | null {
+    const parts: Array<{ type: "text"; value: string } | { type: "payload"; value: any }> = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaping = false;
+    let textBuffer = "";
+
+    const flushTextBuffer = () => {
+      const normalized = this.normalizeCustomProviderPlainTextFragment(textBuffer);
+      if (normalized) {
+        parts.push({ type: "text", value: normalized });
+      }
+      textBuffer = "";
+    };
+
+    for (let i = 0; i < rawText.length; i++) {
+      const char = rawText[i];
+
+      if (start === -1) {
+        if (char === "{" || char === "[") {
+          flushTextBuffer();
+          start = i;
+          depth = 1;
+          inString = false;
+          escaping = false;
+          continue;
+        }
+
+        textBuffer += char;
+        continue;
+      }
+
+      if (inString) {
+        if (escaping) {
+          escaping = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escaping = true;
+          continue;
+        }
+
+        if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === "{" || char === "[") {
+        depth++;
+        continue;
+      }
+
+      if (char === "}" || char === "]") {
+        depth--;
+
+        if (depth < 0) return null;
+
+        if (depth === 0) {
+          const segment = rawText.slice(start, i + 1).trim();
+          try {
+            parts.push({ type: "payload", value: JSON.parse(segment) });
+          } catch {
+            return null;
+          }
+          start = -1;
+        }
+      }
+    }
+
+    if (inString || escaping || depth !== 0 || start !== -1) {
+      return null;
+    }
+
+    flushTextBuffer();
+
+    const payloads = parts
+      .filter((part): part is { type: "payload"; value: any } => part.type === "payload")
+      .map(part => part.value);
+
+    if (payloads.length === 0) {
+      return null;
+    }
+
+    return {
+      data: payloads,
+      text: parts
+        .map(part => part.type === "text"
+          ? part.value
+          : this.extractStreamingTextFromCustomProviderPayload(part.value, responsePath))
+        .filter(Boolean)
+        .join("")
+    };
+  }
+
+  private parseCustomProviderResponse(rawText: string, responsePath?: string): { data: any; text: string } {
+    const trimmed = rawText.trim();
+    if (!trimmed) return { data: {}, text: "" };
+
+    const lines = trimmed.split(/\r?\n/);
+    const structuredPayloads: any[] = [];
+    const structuredTexts: string[] = [];
+    let sawStructured = false;
+
+    for (const line of lines) {
+      const parsed = this.parseStreamLine(line, responsePath);
+      if (parsed) {
+        sawStructured = true;
+        structuredPayloads.push(parsed.payload);
+        if (parsed.text) {
+          structuredTexts.push(parsed.text);
+        }
+        continue;
+      }
+
+      const sequencedLine = this.parseCustomProviderSequence(line, responsePath);
+      if (sequencedLine) {
+        sawStructured = true;
+        structuredPayloads.push(...sequencedLine.data);
+        if (sequencedLine.text) {
+          structuredTexts.push(sequencedLine.text);
+        }
+      }
+    }
+
+    if (sawStructured) {
+      return {
+        data: structuredPayloads.length > 0 ? structuredPayloads : trimmed,
+        text: structuredTexts.join('')
+      };
+    }
+
+    try {
+      const data = JSON.parse(trimmed);
+      return {
+        data,
+        text: this.extractFromCustomProviderPayload(data, responsePath)
+      };
+    } catch {
+      const sequenced = this.parseCustomProviderSequence(trimmed, responsePath);
+      if (sequenced) {
+        return sequenced;
+      }
+
+      return {
+        data: trimmed,
+        text: trimmed
+      };
+    }
   }
 
   /**
@@ -1755,7 +2037,8 @@ ANSWER DIRECTLY:`;
         finalSystemPrompt,
         message,
         context || "",
-        imagePaths?.[0]
+        imagePaths?.[0],
+        this.activeCurlProvider.responsePath
       );
       yield response;
       return;
@@ -2217,24 +2500,41 @@ ANSWER DIRECTLY:`;
         for (const line of lines) {
           if (line.trim().length === 0) continue;
 
-          const items = this.parseStreamLine(line);
-          if (items) {
-            yield items;
+          const parsed = this.parseStreamLine(line, this.customProvider.responsePath);
+          if (parsed?.text) {
+            yield parsed.text;
             yieldedAny = true;
+            continue;
+          }
+
+          const sequenced = this.parseCustomProviderSequence(line, this.customProvider.responsePath);
+          if (sequenced?.text) {
+            yield sequenced.text;
+            yieldedAny = true;
+          } else if (sequenced?.data?.length) {
+            for (const payload of sequenced.data) {
+              const extracted = this.extractStreamingTextFromCustomProviderPayload(payload, this.customProvider.responsePath);
+              if (extracted) {
+                yield extracted;
+                yieldedAny = true;
+              }
+            }
           }
         }
       }
 
-      // If no SSE content was yielded, try parsing the full body as JSON
-      // This handles non-streaming responses (e.g. Ollama with stream: false)
+      // If no stream content was yielded, parse the full body so concatenated JSON,
+      // SSE payloads, and non-streaming JSON all follow the same extraction path.
       if (!yieldedAny && fullBody.trim().length > 0) {
-        try {
-          const data = JSON.parse(fullBody);
-          const extracted = this.extractFromCommonFormats(data);
-          if (extracted) yield extracted;
-        } catch {
-          // Not JSON, yield raw text if it's not looking like garbage
-          if (fullBody.length < 5000) yield fullBody.trim();
+        const parsedBody = this.parseCustomProviderResponse(fullBody, this.customProvider.responsePath);
+        if (parsedBody.text) {
+          yield parsedBody.text;
+        } else if (
+          typeof parsedBody.data === "string" &&
+          parsedBody.data.length < 5000 &&
+          !parsedBody.data.trim().startsWith("{")
+        ) {
+          yield parsedBody.data.trim();
         }
       }
 
@@ -2244,16 +2544,20 @@ ANSWER DIRECTLY:`;
     }
   }
 
-  private parseStreamLine(line: string): string | null {
+  private parseStreamLine(line: string, responsePath?: string): { kind: 'sse' | 'json'; payload: any; text: string } | null {
     const trimmed = line.trim();
     if (!trimmed) return null;
 
     // 1. Handle SSE (data: ...)
-    if (trimmed.startsWith("data: ")) {
+    if (trimmed.startsWith("data:")) {
       if (trimmed === "data: [DONE]") return null;
       try {
-        const json = JSON.parse(trimmed.substring(6));
-        return this.extractFromCommonFormats(json);
+        const json = JSON.parse(trimmed.substring(5).trim());
+        return {
+          kind: 'sse',
+          payload: json,
+          text: this.extractStreamingTextFromCustomProviderPayload(json, responsePath)
+        };
       } catch {
         return null;
       }
@@ -2263,7 +2567,11 @@ ANSWER DIRECTLY:`;
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
       try {
         const json = JSON.parse(trimmed);
-        return this.extractFromCommonFormats(json);
+        return {
+          kind: 'json',
+          payload: json,
+          text: this.extractStreamingTextFromCustomProviderPayload(json, responsePath)
+        };
       } catch {
         return null;
       }

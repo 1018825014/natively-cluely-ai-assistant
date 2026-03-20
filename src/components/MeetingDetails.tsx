@@ -90,22 +90,22 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
 
         if (activeTab === 'summary' && meeting.detailedSummary) {
             textToCopy = `
-Meeting: ${meeting.title}
-Date: ${new Date(meeting.date).toLocaleDateString()}
+会议：${meeting.title}
+日期：${new Date(meeting.date).toLocaleDateString('zh-CN')}
 
-OVERVIEW:
+概览：
 ${meeting.detailedSummary.overview || ''}
 
-ACTION ITEMS:
-${meeting.detailedSummary.actionItems?.map(item => `- ${item}`).join('\n') || 'None'}
+待办事项：
+${meeting.detailedSummary.actionItems?.map(item => `- ${item}`).join('\n') || '无'}
 
-KEY POINTS:
-${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'None'}
+关键要点：
+${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || '无'}
             `.trim();
         } else if (activeTab === 'transcript' && meeting.transcript) {
-            textToCopy = meeting.transcript.map(t => `[${formatTime(t.timestamp)}] ${t.speaker === 'user' ? 'Me' : 'Them'}: ${t.text}`).join('\n');
+            textToCopy = meeting.transcript.map(t => `[${formatTime(t.timestamp)}] ${t.speaker === 'user' ? '我' : '对方'}：${t.text}`).join('\n');
         } else if (activeTab === 'usage' && meeting.usage) {
-            textToCopy = meeting.usage.map(u => `Q: ${u.question || ''}\nA: ${u.answer || ''}`).join('\n\n');
+            textToCopy = meeting.usage.map(u => `问：${u.question || ''}\n答：${u.answer || ''}`).join('\n\n');
         }
 
         if (!textToCopy) return;
@@ -193,7 +193,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                         <div className="w-full pr-4">
                             {/* Date formatting could be improved to use meeting.date if it's an ISO string */}
                             <div className="text-xs text-text-tertiary font-medium mb-1">
-                                {new Date(meeting.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                                {new Date(meeting.date).toLocaleDateString('zh-CN', { weekday: 'long', month: 'short', day: 'numeric' })}
                             </div>
 
                             {/* Editable Title */}
@@ -231,7 +231,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                             transition={{ type: "spring", stiffness: 400, damping: 30 }}
                                         />
                                     )}
-                                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                                    {tab === 'summary' ? '摘要' : tab === 'transcript' ? '转录' : '记录'}
                                 </button>
                             ))}
                         </div>
@@ -242,7 +242,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                             className="flex items-center gap-2 text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
                         >
                             {isCopied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                            {isCopied ? 'Copied' : activeTab === 'summary' ? 'Copy full summary' : activeTab === 'transcript' ? 'Copy full transcript' : 'Copy usage'}
+                            {isCopied ? '已复制' : activeTab === 'summary' ? '复制完整摘要' : activeTab === 'transcript' ? '复制完整转录' : '复制使用记录'}
                         </button>
                     </div>
 
@@ -277,7 +277,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                     <section className="mb-8">
                                         <div className="flex items-center justify-between mb-4">
                                             <EditableTextBlock
-                                                initialValue={meeting.detailedSummary?.actionItemsTitle || 'Action Items'}
+                                                initialValue={meeting.detailedSummary?.actionItemsTitle || '待办事项'}
                                                 onSave={(val) => {
                                                     setMeeting(prev => ({
                                                         ...prev,
@@ -300,7 +300,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                                             onSave={(val) => handleActionItemSave(i, val)}
                                                             tagName="p"
                                                             className="text-sm text-text-secondary leading-relaxed -ml-2 px-2 rounded-sm transition-colors"
-                                                            placeholder="Type an action item..."
+                                                            placeholder="输入待办事项..."
                                                             onEnter={() => {
                                                                 const newItems = [...(meeting.detailedSummary?.actionItems || [])];
                                                                 newItems.splice(i + 1, 0, "");
@@ -322,7 +322,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                     <section>
                                         <div className="flex items-center justify-between mb-4">
                                             <EditableTextBlock
-                                                initialValue={meeting.detailedSummary?.keyPointsTitle || 'Key Points'}
+                                                initialValue={meeting.detailedSummary?.keyPointsTitle || '关键要点'}
                                                 onSave={(val) => {
                                                     setMeeting(prev => ({
                                                         ...prev,
@@ -345,7 +345,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                                             onSave={(val) => handleKeyPointSave(i, val)}
                                                             tagName="p"
                                                             className="text-sm text-text-secondary leading-relaxed -ml-2 px-2 rounded-sm transition-colors"
-                                                            placeholder="Type a key point..."
+                                                            placeholder="输入要点..."
                                                             onEnter={() => {
                                                                 const newItems = [...(meeting.detailedSummary?.keyPoints || [])];
                                                                 newItems.splice(i + 1, 0, "");
@@ -377,14 +377,14 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                         console.log('Filtered Transcript:', filteredTranscript);
 
                                         if (filteredTranscript.length === 0) {
-                                            return <p className="text-text-tertiary">No transcript available.</p>;
+                                            return <p className="text-text-tertiary">暂无转录内容。</p>;
                                         }
 
                                         return filteredTranscript.map((entry, i) => (
                                             <div key={i} className="group">
                                                 <div className="flex items-center gap-2 mb-1">
                                                     <span className="text-xs font-semibold text-text-secondary">
-                                                        {entry.speaker === 'user' ? 'Me' : 'Them'}
+                                                        {entry.speaker === 'user' ? '我' : '对方'}
                                                     </span>
                                                     <span className="text-xs text-text-tertiary font-mono">{entry.timestamp ? formatTime(entry.timestamp) : '0:00'}</span>
                                                 </div>
@@ -481,7 +481,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                         )}
                                     </div>
                                 ))}
-                                {!meeting.usage?.length && <p className="text-text-tertiary">No usage history.</p>}
+                                {!meeting.usage?.length && <p className="text-text-tertiary">暂无使用记录。</p>}
                             </motion.section>
                         )}
                     </div>
@@ -497,7 +497,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={handleInputKeyDown}
-                        placeholder="Ask about this meeting..."
+                        placeholder="问问这场会议的内容..."
                         className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 dark:border-white/10 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
                     />
                     <button

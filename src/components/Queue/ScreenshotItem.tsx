@@ -52,7 +52,7 @@ const ScreenshotItem: React.FC<ScreenshotItemProps> = ({
               handleDelete()
             }}
             className="absolute top-2 left-2 p-1 rounded-full bg-black bg-opacity-50 text-white opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-            aria-label="Delete screenshot"
+            aria-label="删除截图"
           >
             <X size={16} />
           </button>

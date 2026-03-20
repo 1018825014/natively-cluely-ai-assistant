@@ -171,7 +171,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
                     className="flex items-center gap-2 mt-3 text-[13px] text-text-tertiary hover:text-text-secondary transition-colors"
                 >
                     {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                    {copied ? 'Copied' : 'Copy message'}
+                    {copied ? '已复制' : '复制内容'}
                 </button>
             )}
         </motion.div>
@@ -338,7 +338,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
             const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
                 console.error('[MeetingChat] RAG stream error:', data.error);
                 setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                setErrorMessage("Couldn't get a response. Please try again.");
+                setErrorMessage("暂时没拿到回复，请再试一次。");
                 setChatState('error');
                 streamBuffer.reset();
                 tokenCleanup?.();
@@ -395,7 +395,7 @@ ${contextString}`;
                     const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
                         console.error('[MeetingChat] Gemini stream error (fallback):', error);
                         setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                        setErrorMessage("Couldn't get a response. Please check your settings.");
+                        setErrorMessage("暂时没拿到回复，请检查设置后再试。");
                         setChatState('error');
                         streamBuffer.reset();
                         oldTokenCleanup?.();
@@ -447,7 +447,7 @@ ${contextString}`;
                 const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
                     console.error('[MeetingChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                    setErrorMessage("Couldn't get a response. Please check your settings.");
+                    setErrorMessage("暂时没拿到回复，请检查设置后再试。");
                     setChatState('error');
                     streamBuffer.reset();
                     oldTokenCleanup?.();
@@ -466,7 +466,7 @@ ${contextString}`;
         } catch (error) {
             console.error('[MeetingChat] Error:', error);
             setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-            setErrorMessage("Something went wrong. Please try again.");
+            setErrorMessage("出了点问题，请稍后再试。");
             setChatState('error');
         }
     }, [chatState, buildContextString, meetingContext]);
@@ -508,7 +508,7 @@ ${contextString}`;
                         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle shrink-0">
                             <div className="flex items-center gap-2 text-text-tertiary">
                                 <img src={nativelyIcon} className="w-3.5 h-3.5 brightness-0 dark:brightness-100 dark:opacity-50 dark:grayscale" alt="logo" />
-                                <span className="text-[13px] font-medium">Search this meeting</span>
+                                <span className="text-[13px] font-medium">搜索这场会议内容</span>
                             </div>
                             <button
                                 onClick={handleClose}

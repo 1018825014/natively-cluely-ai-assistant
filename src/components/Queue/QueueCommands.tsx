@@ -43,7 +43,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       console.log('[QueueCommands] Initial audio status:', status)
       setIsNativeAudioConnected(status.connected)
       if (status.connected) {
-        setAudioResult('🎤 Connected to native audio service')
+        setAudioResult('已连接原生音频服务')
       }
     }).catch(err => console.error('Failed to get audio status:', err))
 
@@ -51,13 +51,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
     cleanupFns.push(window.electronAPI.onNativeAudioConnected(() => {
       console.log('[QueueCommands] Native audio connected')
       setIsNativeAudioConnected(true)
-      setAudioResult('🎤 Connected to native audio service')
+      setAudioResult('已连接原生音频服务')
     }))
 
     cleanupFns.push(window.electronAPI.onNativeAudioDisconnected(() => {
       console.log('[QueueCommands] Native audio disconnected')
       setIsNativeAudioConnected(false)
-      setAudioResult('⚠️ Disconnected from native audio service')
+      setAudioResult('原生音频服务已断开')
     }))
 
     // Transcript updates
@@ -112,8 +112,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       setLatestSuggestion(null)
     } else {
       setAudioResult(isNativeAudioConnected
-        ? '🎤 Listening... speak into your microphone'
-        : '⚠️ Native audio service not connected')
+        ? '正在聆听，请对着麦克风说话'
+        : '原生音频服务尚未连接')
     }
   }
 
@@ -124,7 +124,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       <div className="text-xs text-white/90 liquid-glass-bar py-1 px-4 flex items-center justify-center gap-4 header-draggable-area">
         {/* Show/Hide */}
         <div className="flex items-center gap-2">
-          <span className="text-[11px] leading-none">Show/Hide</span>
+          <span className="text-[11px] leading-none">显示/隐藏</span>
           <div className="flex gap-1">
             <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
               ⌘
@@ -141,7 +141,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         {/* Solve Command */}
         {screenshots.length > 0 && (
           <div className="flex items-center gap-2">
-            <span className="text-[11px] leading-none">Solve</span>
+            <span className="text-[11px] leading-none">解题</span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
                 ⌘
@@ -161,9 +161,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             type="button"
           >
             {isRecording ? (
-              <span className="animate-pulse">● Stop Recording</span>
+              <span className="animate-pulse">停止录音</span>
             ) : (
-              <span>🎤 Record Voice</span>
+              <span>录音输入</span>
             )}
           </button>
         </div>
@@ -175,7 +175,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             onClick={onChatToggle}
             type="button"
           >
-            💬 Chat
+            聊天
           </button>
         </div>
 
@@ -186,7 +186,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             onClick={onSettingsToggle}
             type="button"
           >
-            ⚙️ Models
+            模型
           </button>
         </div>
 
@@ -211,12 +211,12 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             >
               <div className="p-3 text-xs bg-black/80 backdrop-blur-md rounded-lg border border-white/10 text-white/90 shadow-lg">
                 <div className="space-y-4">
-                  <h3 className="font-medium truncate">Keyboard Shortcuts</h3>
+                  <h3 className="font-medium truncate">键盘快捷键</h3>
                   <div className="space-y-3">
                     {/* Toggle Command */}
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="truncate">Toggle Window</span>
+                        <span className="truncate">切换窗口</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                             ⌘
@@ -227,13 +227,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         </div>
                       </div>
                       <p className="text-[10px] leading-relaxed text-white/70 truncate">
-                        Show or hide this window.
+                        显示或隐藏这个窗口。
                       </p>
                     </div>
                     {/* Screenshot Command */}
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="truncate">Take Screenshot</span>
+                        <span className="truncate">截图</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                             ⌘
@@ -244,16 +244,14 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         </div>
                       </div>
                       <p className="text-[10px] leading-relaxed text-white/70 truncate">
-                        Take a screenshot of the problem description. The tool
-                        will extract and analyze the problem. The 5 latest
-                        screenshots are saved.
+                        对题目描述进行截图，工具会自动提取并分析内容，并保存最近 5 张截图。
                       </p>
                     </div>
 
                     {/* Solve Command */}
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="truncate">Solve Problem</span>
+                        <span className="truncate">解决题目</span>
                         <div className="flex gap-1 flex-shrink-0">
                           <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                             ⌘
@@ -264,7 +262,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         </div>
                       </div>
                       <p className="text-[10px] leading-relaxed text-white/70 truncate">
-                        Generate a solution based on the current problem.
+                        根据当前题目生成解答。
                       </p>
                     </div>
                   </div>
@@ -280,7 +278,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         {/* Sign Out Button - Moved to end */}
         <button
           className="text-red-500/70 hover:text-red-500/90 transition-colors"
-          title="Sign Out"
+          title="退出登录"
           onClick={() => window.electronAPI.quitApp()}
         >
           <IoLogOutOutline className="w-4 h-4" />
@@ -289,7 +287,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       {/* Audio Result Display */}
       {audioResult && (
         <div className="mt-2 p-2 bg-white/10 rounded text-white text-xs max-w-md">
-          <span className="font-semibold">Audio Result:</span> {audioResult}
+          <span className="font-semibold">音频结果：</span> {audioResult}
         </div>
       )}
       {/* Chat Dialog Overlay */}

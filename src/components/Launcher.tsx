@@ -50,7 +50,7 @@ interface LauncherProps {
 
 // Helper to format date groups
 const getGroupLabel = (dateStr: string) => {
-    if (dateStr === "Today") return "Today"; // Backward compatibility
+    if (dateStr === "Today") return "今天"; // Backward compatibility
 
     const date = new Date(dateStr);
     const now = new Date();
@@ -60,17 +60,17 @@ const getGroupLabel = (dateStr: string) => {
 
     const checkDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
-    if (checkDate.getTime() === today.getTime()) return "Today";
-    if (checkDate.getTime() === yesterday.getTime()) return "Yesterday";
+    if (checkDate.getTime() === today.getTime()) return "今天";
+    if (checkDate.getTime() === yesterday.getTime()) return "昨天";
 
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString('zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' });
 };
 
 // Helper to format time (e.g. 3:14pm)
 const formatTime = (dateStr: string) => {
-    if (dateStr === "Today") return "Just now"; // Legacy
+    if (dateStr === "Today") return "刚刚"; // Legacy
     const date = new Date(dateStr);
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 };
 
 const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onPageChange, ollamaPullStatus = 'idle', ollamaPullPercent = 0, ollamaPullMessage = '' }) => {
@@ -208,7 +208,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
     };
 
     if (!window.electronAPI) {
-        return <div className="text-white p-10">Error: Electron API not initialized. Check preload script.</div>;
+        return <div className="text-white p-10">错误：Electron API 尚未初始化，请检查 preload 脚本。</div>;
     }
 
     const toggleDetectable = () => {
@@ -230,10 +230,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
     // but JS object key order isn't guaranteed. We can use a Map or just known keys.)
     // Simple sort for keys:
     const sortedGroups = Object.keys(groupedMeetings).sort((a, b) => {
-        if (a === 'Today') return -1;
-        if (b === 'Today') return 1;
-        if (a === 'Yesterday') return -1;
-        if (b === 'Yesterday') return 1;
+        if (a === 'Today' || a === '今天') return -1;
+        if (b === 'Today' || b === '今天') return 1;
+        if (a === 'Yesterday' || a === '昨天') return -1;
+        if (b === 'Yesterday' || b === '昨天') return 1;
         // Approximation for others: parse date
         return new Date(b).getTime() - new Date(a).getTime();
     });
@@ -392,7 +392,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                             // analytics.trackCommandExecuted('open_settings'); // Optional, high volume
                         }}
                         className="p-2 text-text-secondary hover:text-text-primary transition-all duration-300 hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]"
-                        title="Settings"
+                        title="设置"
                     >
                         <Settings size={18} />
                     </button>
@@ -438,14 +438,14 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-4">
-                                            <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">My Natively</h1>
+                                            <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">我的 Natively</h1>
 
                                             {/* Refresh Button */}
                                             <button
                                                 onClick={handleRefresh}
                                                 disabled={isRefreshing}
                                                 className={`p-2 text-text-secondary hover:text-text-primary hover:bg-white/10 rounded-full transition-colors ${isRefreshing ? 'animate-spin text-blue-400' : ''}`}
-                                                title="Refresh State"
+                                                title="刷新状态"
                                             >
                                                 <RefreshCw size={18} />
                                             </button>
@@ -476,7 +476,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                     </svg>
                                                 )}
                                                 <span className={`text-xs font-medium flex-1 transition-colors text-[#B7B7B8]`}>
-                                                    {isDetectable ? "Detectable" : "Undetectable"}
+                                                    {isDetectable ? "可见模式" : "隐身模式"}
                                                 </span>
                                                 <div
                                                     className={`w-8 h-4 rounded-full relative transition-colors ${!isDetectable ? 'bg-blue-500' : 'bg-zinc-700'}`}
@@ -507,7 +507,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                         )}
                                                         <div className="flex flex-col">
                                                             <span className="text-[11px] font-medium text-white/80 whitespace-nowrap">
-                                                                {ollamaPullStatus === 'downloading' ? `Setting up AI memory... ${ollamaPullPercent}%` : ollamaPullMessage}
+                                                                {ollamaPullStatus === 'downloading' ? `正在准备 AI 记忆... ${ollamaPullPercent}%` : ollamaPullMessage}
                                                             </span>
                                                             {ollamaPullStatus === 'downloading' && (
                                                                 <div className="w-full h-[3px] bg-white/10 rounded-full mt-1 overflow-hidden">
@@ -553,7 +553,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                             <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
 
                                             <img src={icon} alt="Logo" className="w-[18px] h-[18px] object-contain brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.1)] opacity-90" />
-                                            <span className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.1)] text-[20px] leading-none">Start Natively</span>
+                                            <span className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.1)] text-[20px] leading-none">启动 Natively</span>
                                         </button>
                                     </div>
 
@@ -569,13 +569,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
 
                                                 <div className="text-center max-w-lg z-10">
                                                     <span className="inline-block px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold tracking-wider mb-4 border border-emerald-500/20">
-                                                        READY TO JOIN
+                                                        准备加入
                                                     </span>
                                                     <h2 className="text-2xl font-bold text-white mb-2">{preparedEvent.title}</h2>
                                                     <p className="text-xs text-text-secondary mb-6 flex items-center justify-center gap-2">
                                                         <Calendar size={12} />
                                                         {new Date(preparedEvent.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} - {new Date(preparedEvent.endTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                                                        {preparedEvent.link && " • Link Ready"}
+                                                        {preparedEvent.link && " • 链接已就绪"}
                                                     </p>
 
                                                     <div className="flex items-center gap-3 justify-center">
@@ -583,14 +583,14 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                             onClick={handleStartPreparedMeeting}
                                                             className="bg-emerald-500 hover:bg-emerald-400 text-white px-8 py-3 rounded-xl text-sm font-semibold transition-all shadow-lg hover:shadow-emerald-500/25 active:scale-95 flex items-center gap-2"
                                                         >
-                                                            Start Meeting
+                                                            开始会议
                                                             <ArrowRight size={16} />
                                                         </button>
                                                         <button
                                                             onClick={() => setIsPrepared(false)}
                                                             className="px-4 py-3 rounded-xl text-xs font-medium text-text-tertiary hover:text-white transition-colors"
                                                         >
-                                                            Cancel
+                                                            取消
                                                         </button>
                                                     </div>
                                                 </div>
@@ -606,8 +606,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                     <div className="p-5 flex-1 relative z-10">
                                                         <div className="flex items-center gap-2 mb-2">
                                                             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                                            <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Up Next</span>
-                                                            <span className="text-[11px] text-text-tertiary">• Starts in {Math.max(0, Math.ceil((new Date(nextMeeting.startTime).getTime() - Date.now()) / 60000))} min</span>
+                                                            <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">接下来</span>
+                                                            <span className="text-[11px] text-text-tertiary">• {Math.max(0, Math.ceil((new Date(nextMeeting.startTime).getTime() - Date.now()) / 60000))} 分钟后开始</span>
                                                         </div>
 
                                                         <h2 className="text-xl font-bold text-white leading-tight mb-1 line-clamp-2">
@@ -621,7 +621,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                 <>
                                                                     <span className="opacity-20">|</span>
                                                                     <LinkIcon size={12} />
-                                                                    <span className="truncate max-w-[150px]">Meeting Link Found</span>
+                                                                    <span className="truncate max-w-[150px]">已找到会议链接</span>
                                                                 </>
                                                             )}
                                                         </div>
@@ -634,13 +634,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                             className="flex-1 bg-white/10 hover:bg-white/20 border border-white/10 text-white px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-2"
                                                         >
                                                             <Zap size={13} className="text-yellow-400" />
-                                                            Prepare
+                                                            提前准备
                                                         </button>
                                                         <button
                                                             onClick={onStartMeeting} // For now just start, later could link
                                                             className="px-4 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
                                                         >
-                                                            Start now
+                                                            立即开始
                                                         </button>
                                                     </div>
 
@@ -668,13 +668,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                 <h3 className="text-[19px] leading-tight mb-4">
                                                     {isCalendarConnected ? (
                                                         <>
-                                                            <span className="block font-semibold text-white">Calendar linked</span>
-                                                            <span className="block font-medium text-white/60 text-[0.95em]">Events synced</span>
+                                                            <span className="block font-semibold text-white">日历已关联</span>
+                                                            <span className="block font-medium text-white/60 text-[0.95em]">事件已同步</span>
                                                         </>
                                                     ) : (
                                                         <>
-                                                            <span className="block font-semibold text-white">Link your calendar to</span>
-                                                            <span className="block font-medium text-white/60 text-[0.95em]">see upcoming events</span>
+                                                            <span className="block font-semibold text-white">关联你的日历，以便</span>
+                                                            <span className="block font-medium text-white/60 text-[0.95em]">查看接下来的日程</span>
                                                         </>
                                                     )}
                                                 </h3>
@@ -715,7 +715,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                 {m.title === 'Processing...' ? (
                                                                     <div className="flex items-center gap-2 transition-all duration-200 ease-out group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit">
                                                                         <RefreshCw size={12} className="animate-spin text-blue-500" />
-                                                                        <span className="text-xs text-blue-500 font-medium">Finalizing...</span>
+                                                                        <span className="text-xs text-blue-500 font-medium">正在收尾...</span>
                                                                     </div>
                                                                 ) : (
                                                                     <>
@@ -800,7 +800,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                                 }}
                                                                             >
                                                                                 <Trash2 size={13} />
-                                                                                Delete
+                                                                                删除
                                                                             </button>
                                                                         </div>
                                                                     </motion.div>
@@ -813,7 +813,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                         ))}
 
                                         {meetings.length === 0 && (
-                                            <div className="p-4 text-text-tertiary text-sm">No recent meetings.</div>
+                                            <div className="p-4 text-text-tertiary text-sm">最近还没有会议记录。</div>
                                         )}
 
                                     </div>
@@ -844,8 +844,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
 
                         {/* Text Content */}
                         <div className="flex flex-col gap-0.5">
-                            <span className="text-[14px] font-semibold text-white/95 leading-none tracking-tight drop-shadow-md">Refreshed</span>
-                            <span className="text-[11px] text-blue-200/60 font-medium leading-none tracking-wide">Synced with calendar</span>
+                            <span className="text-[14px] font-semibold text-white/95 leading-none tracking-tight drop-shadow-md">已刷新</span>
+                            <span className="text-[11px] text-blue-200/60 font-medium leading-none tracking-wide">已与日历同步</span>
                         </div>
 
                         {/* Specular Highlight Overlay */}

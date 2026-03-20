@@ -11,6 +11,15 @@ interface CustomProvider {
     responsePath: string;
 }
 
+interface CustomProviderTestPreview {
+    requestUrl?: string;
+    method?: string;
+    status?: number;
+    responsePath?: string;
+    extractedResponse?: string;
+    rawResponse?: string;
+}
+
 interface ModelOption {
     id: string;
     name: string;
@@ -23,7 +32,7 @@ interface ModelSelectProps {
     placeholder?: string;
 }
 
-const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, placeholder = "Select model" }) => {
+const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, placeholder = "选择模型" }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -68,7 +77,7 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
                             </button>
                         ))}
                         {options.length === 0 && (
-                            <div className="px-3 py-2 text-xs text-gray-500 italic">No models available</div>
+                            <div className="px-3 py-2 text-xs text-gray-500 italic">暂无可用模型</div>
                         )}
                     </div>
                 </div>
@@ -90,6 +99,7 @@ export const AIProvidersSettings: React.FC = () => {
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
     const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({});
     const [testError, setTestError] = useState<Record<string, string>>({});
+    const [customTestPreview, setCustomTestPreview] = useState<Record<string, CustomProviderTestPreview>>({});
 
     // --- Custom Providers ---
     const [customProviders, setCustomProviders] = useState<CustomProvider[]>([]);
@@ -281,7 +291,7 @@ export const AIProvidersSettings: React.FC = () => {
     };
 
     const handleRemoveKey = async (provider: string, setter: (val: string) => void) => {
-        if (!confirm(`Are you sure you want to remove the ${provider} API key?`)) return;
+        if (!confirm(`确定要移除 ${provider} 的 API Key 吗？`)) return;
         try {
             let result;
             // @ts-ignore
@@ -318,11 +328,11 @@ export const AIProvidersSettings: React.FC = () => {
                 setTimeout(() => setTestStatus(prev => ({ ...prev, [provider]: 'idle' })), 3000);
             } else {
                 setTestStatus(prev => ({ ...prev, [provider]: 'error' }));
-                setTestError(prev => ({ ...prev, [provider]: result.error || 'Connection failed' }));
+                setTestError(prev => ({ ...prev, [provider]: result.error || '连接失败' }));
             }
         } catch (e: any) {
             setTestStatus(prev => ({ ...prev, [provider]: 'error' }));
-            setTestError(prev => ({ ...prev, [provider]: e.message || 'Connection failed' }));
+            setTestError(prev => ({ ...prev, [provider]: e.message || '连接失败' }));
         }
     };
 
@@ -335,6 +345,48 @@ export const AIProvidersSettings: React.FC = () => {
         };
         // @ts-ignore
         window.electronAPI?.openExternal(urls[provider]);
+    };
+
+    const getCustomProviderTestKey = (providerId: string) => `custom:${providerId}`;
+
+    const handleTestCustomConnection = async (provider: CustomProvider, statusKey: string = getCustomProviderTestKey(provider.id)) => {
+        const validation = validateCurl(provider.curlCommand);
+        if (!validation.isValid) {
+            const errorMessage = validation.message || 'cURL 鍛戒护鏃犳晥銆?';
+            setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
+            setTestError(prev => ({ ...prev, [statusKey]: errorMessage }));
+            setCustomTestPreview(prev => ({ ...prev, [statusKey]: {} }));
+            return;
+        }
+
+        setTestStatus(prev => ({ ...prev, [statusKey]: 'testing' }));
+        setTestError(prev => ({ ...prev, [statusKey]: '' }));
+
+        try {
+            // @ts-ignore
+            const result = await window.electronAPI?.testCustomProviderConnection({
+                ...provider,
+                name: provider.name?.trim() || 'Custom Provider',
+                curlCommand: provider.curlCommand.trim(),
+                responsePath: provider.responsePath?.trim() || '',
+            });
+
+            setCustomTestPreview(prev => ({ ...prev, [statusKey]: result?.preview || {} }));
+
+            if (result?.success) {
+                setTestStatus(prev => ({ ...prev, [statusKey]: 'success' }));
+                setTimeout(() => {
+                    setTestStatus(prev => ({ ...prev, [statusKey]: 'idle' }));
+                    setTestError(prev => ({ ...prev, [statusKey]: '' }));
+                }, 3000);
+            } else {
+                setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
+                setTestError(prev => ({ ...prev, [statusKey]: result?.error || '杩炴帴澶辫触' }));
+            }
+        } catch (e: any) {
+            setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
+            setTestError(prev => ({ ...prev, [statusKey]: e.message || '杩炴帴澶辫触' }));
+        }
     };
 
 
@@ -361,13 +413,13 @@ export const AIProvidersSettings: React.FC = () => {
     const handleSaveCustom = async () => {
         setCurlError(null);
         if (!customName.trim()) {
-            setCurlError("Provider Name is required.");
+            setCurlError("必须填写提供商名称。");
             return;
         }
 
         const validation = validateCurl(customCurl);
         if (!validation.isValid) {
-            setCurlError(validation.message || "Invalid cURL command.");
+            setCurlError(validation.message || "cURL 命令无效。");
             return;
         }
 
@@ -396,7 +448,7 @@ export const AIProvidersSettings: React.FC = () => {
     };
 
     const handleDeleteCustom = async (id: string) => {
-        if (!confirm("Are you sure you want to delete this provider?")) return;
+        if (!confirm("确定要删除这个提供商吗？")) return;
         try {
             // @ts-ignore
             const result = await window.electronAPI.deleteCustomProvider(id);
@@ -410,19 +462,71 @@ export const AIProvidersSettings: React.FC = () => {
         }
     };
 
+    const customEditorTestKey = editingProvider ? getCustomProviderTestKey(editingProvider.id) : 'custom:draft';
+
+    const renderCustomProviderPreview = (statusKey: string) => {
+        const preview = customTestPreview[statusKey];
+        if (!preview || (!preview.rawResponse && !preview.extractedResponse && !preview.requestUrl)) {
+            return null;
+        }
+
+        return (
+            <div className="mt-3 rounded-xl border border-border-subtle bg-bg-item-surface overflow-hidden">
+                <div className="px-4 py-3 border-b border-border-subtle bg-bg-elevated/40 flex items-center justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-medium text-text-primary uppercase tracking-wide">Test Preview</p>
+                        <p className="text-[10px] text-text-secondary mt-1">
+                            {preview.method || 'POST'} {preview.status ? `· HTTP ${preview.status}` : ''}
+                        </p>
+                    </div>
+                    {preview.responsePath && (
+                        <code className="text-[10px] text-text-secondary bg-bg-input border border-border-subtle rounded px-2 py-1">
+                            {preview.responsePath}
+                        </code>
+                    )}
+                </div>
+
+                <div className="p-4 space-y-3">
+                    {preview.requestUrl && (
+                        <div>
+                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">Request URL</div>
+                            <div className="max-h-20 overflow-auto rounded-lg bg-bg-input border border-border-subtle px-3 py-2 text-[11px] text-text-secondary font-mono break-all">
+                                {preview.requestUrl}
+                            </div>
+                        </div>
+                    )}
+
+                    {preview.extractedResponse && (
+                        <div>
+                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">Extracted Response</div>
+                            <pre className="max-h-40 overflow-auto rounded-lg bg-bg-input border border-border-subtle px-3 py-2 text-[11px] text-text-primary whitespace-pre-wrap break-words">{preview.extractedResponse}</pre>
+                        </div>
+                    )}
+
+                    {preview.rawResponse && (
+                        <details className="rounded-lg border border-border-subtle bg-bg-input/60 px-3 py-2">
+                            <summary className="cursor-pointer text-[11px] text-text-secondary select-none">Raw Response</summary>
+                            <pre className="mt-2 max-h-56 overflow-auto text-[11px] text-text-primary whitespace-pre-wrap break-words">{preview.rawResponse}</pre>
+                        </details>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="space-y-5 animated fadeIn pb-10">
             {/* Default Model for Chat */}
             <div className="space-y-5">
                 <div>
-                    <h3 className="text-sm font-bold text-text-primary mb-1">Default Model for Chat</h3>
-                    <p className="text-xs text-text-secondary mb-2">Primary model for new chats. Other configured models act as fallbacks.</p>
+                    <h3 className="text-sm font-bold text-text-primary mb-1">聊天默认模型</h3>
+                    <p className="text-xs text-text-secondary mb-2">新对话默认使用的主模型，其他已配置模型会作为回退选项。</p>
                 </div>
 
                 <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between">
                     <div>
-                        <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Active Model</label>
-                        <p className="text-[10px] text-text-secondary">Applies to new chats instantly.</p>
+                        <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">当前模型</label>
+                        <p className="text-[10px] text-text-secondary">新对话会立即使用。</p>
                     </div>
                     <ModelSelect
                         value={defaultModel}
@@ -437,7 +541,7 @@ export const AIProvidersSettings: React.FC = () => {
                                 }
                             }
                             customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
-                            ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
+                            ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m}（本地）` }));
                             // Ensure current default model always appears
                             if (defaultModel && !opts.find(o => o.id === defaultModel)) {
                                 opts.unshift({ id: defaultModel, name: prettifyModelId(defaultModel) });
@@ -455,22 +559,22 @@ export const AIProvidersSettings: React.FC = () => {
                 {/* Fast Response Mode */}
                 <div
                     className={`bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between ${!hasStoredKey.groq ? 'opacity-50 grayscale' : ''}`}
-                    title={!hasStoredKey.groq ? "Requires Groq API Key to be configured" : ""}
+                    title={!hasStoredKey.groq ? "需要先配置 Groq API Key" : ""}
                 >
                     <div>
                         <div className="flex items-center gap-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Fast Response Mode</label>
-                            <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">NEW</span>
+                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">极速回复模式</label>
+                            <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">新</span>
                         </div>
-                        <p className="text-[10px] text-text-secondary mt-0.5">Super fast responses using Groq Llama 3 for text. Multimodal requests still use your Default Model.</p>
+                        <p className="text-[10px] text-text-secondary mt-0.5">文本请求会优先使用 Groq Llama 3 获得更快回复；涉及多模态时仍会使用你的默认模型。</p>
                         {!hasStoredKey.groq && (
-                            <p className="text-[10px] text-orange-500 mt-0.5 font-medium">Requires a Groq API Key to be configured below.</p>
+                            <p className="text-[10px] text-orange-500 mt-0.5 font-medium">需要先在下方配置 Groq API Key。</p>
                         )}
                     </div>
                     <div
                         onClick={async () => {
                             if (!hasStoredKey.groq) {
-                                alert("Please configure a Groq API Key first to enable Fast Response Mode.");
+                                alert("请先配置 Groq API Key，再启用极速回复模式。");
                                 return;
                             }
                             const newState = !fastResponseMode;
@@ -489,8 +593,8 @@ export const AIProvidersSettings: React.FC = () => {
             {/* Cloud Providers */}
             <div className="space-y-5">
                 <div>
-                    <h3 className="text-sm font-bold text-text-primary mb-1">Cloud Providers</h3>
-                    <p className="text-xs text-text-secondary mb-2">Add API keys to unlock cloud AI models.</p>
+                    <h3 className="text-sm font-bold text-text-primary mb-1">云端提供商</h3>
+                    <p className="text-xs text-text-secondary mb-2">添加 API Key 以启用云端 AI 模型。</p>
                 </div>
 
                 <div className="space-y-4">
@@ -582,8 +686,8 @@ export const AIProvidersSettings: React.FC = () => {
             <div className="space-y-5">
                 <div className="flex items-center justify-between mb-2">
                     <div>
-                        <h3 className="text-sm font-bold text-text-primary mb-1">Local Models (Ollama)</h3>
-                        <p className="text-xs text-text-secondary">Run open-source models locally.</p>
+                        <h3 className="text-sm font-bold text-text-primary mb-1">本地模型（Ollama）</h3>
+                        <p className="text-xs text-text-secondary">在本地运行开源模型。</p>
                     </div>
                     <button
                         onClick={async () => {
@@ -593,7 +697,7 @@ export const AIProvidersSettings: React.FC = () => {
                             setTimeout(() => setIsRefreshingOllama(false), 500);
                         }}
                         className="p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-input transition-colors"
-                        title="Refresh Ollama"
+                        title="刷新 Ollama"
                         disabled={isRefreshingOllama}
                     >
                         <RefreshCw size={18} className={isRefreshingOllama ? "animate-spin" : ""} />
@@ -603,13 +707,13 @@ export const AIProvidersSettings: React.FC = () => {
                 <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
                     {ollamaStatus === 'checking' && (
                         <div className="flex items-center gap-2 text-xs text-text-secondary">
-                            <span className="animate-spin">⏳</span> Checking for Ollama...
+                            <Loader2 size={14} className="animate-spin" /> 正在检查 Ollama...
                         </div>
                     )}
 
                     {ollamaStatus === 'fixing' && (
                         <div className="flex items-center gap-2 text-xs text-text-secondary">
-                            <span className="animate-spin">🔧</span> Attempting to auto-fix connection...
+                            <Loader2 size={14} className="animate-spin" /> 正在尝试自动修复连接...
                         </div>
                     )}
 
@@ -617,17 +721,17 @@ export const AIProvidersSettings: React.FC = () => {
                         <div className="flex flex-col gap-2">
                             <div className="flex items-center gap-2 text-xs text-red-400">
                                 <AlertCircle size={14} />
-                                <span>Ollama not detected</span>
+                                <span>未检测到 Ollama</span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <p className="text-xs text-text-secondary">
-                                    Ensure Ollama is running (`ollama serve`).
+                                    请确认 Ollama 已启动（`ollama serve`）。
                                 </p>
                                 <button
                                     onClick={handleFixOllama}
                                     className="text-[10px] bg-bg-elevated hover:bg-bg-input px-2 py-1 rounded border border-border-subtle"
                                 >
-                                    Auto-Fix Connection
+                                    自动修复连接
                                 </button>
                             </div>
                         </div>
@@ -637,14 +741,14 @@ export const AIProvidersSettings: React.FC = () => {
                         <div className="space-y-3">
                             <div className="flex items-center gap-2 text-xs text-green-400 mb-3">
                                 <CheckCircle size={14} />
-                                <span>Ollama connected</span>
+                                <span>Ollama 已连接</span>
                             </div>
 
                             <div className="grid grid-cols-1 gap-2">
                                 {ollamaModels.map(model => (
                                     <div key={model} className="flex items-center justify-between p-2 bg-bg-input rounded-lg border border-border-subtle">
                                         <span className="text-xs text-text-primary font-mono">{model}</span>
-                                        <span className="text-[10px] text-bg-elevated bg-text-secondary px-1.5 py-0.5 rounded-full font-bold">LOCAL</span>
+                                        <span className="text-[10px] text-bg-elevated bg-text-secondary px-1.5 py-0.5 rounded-full font-bold">本地</span>
                                     </div>
                                 ))}
                             </div>
@@ -652,7 +756,7 @@ export const AIProvidersSettings: React.FC = () => {
                     )}
                     {ollamaStatus === 'detected' && ollamaModels.length === 0 && (
                         <div className="text-xs text-text-secondary">
-                            Ollama is running but no models found. Run `ollama pull llama3` to get started.
+                            Ollama 已启动，但还没有找到模型。可以先运行 `ollama pull llama3`。
                         </div>
                     )}
                 </div>
@@ -663,33 +767,33 @@ export const AIProvidersSettings: React.FC = () => {
                 <div className="flex items-center justify-between mb-2">
                     <div>
                         <div className="flex items-center gap-2 mb-1">
-                            <h3 className="text-sm font-bold text-text-primary">Custom Providers</h3>
-                            <span className="px-1.5 py-0 rounded-full text-[7px] font-bold bg-yellow-500/10 text-yellow-500 uppercase tracking-widest border border-yellow-500/20 leading-loose mt-0.5">Experimental</span>
+                            <h3 className="text-sm font-bold text-text-primary">自定义提供商</h3>
+                            <span className="px-1.5 py-0 rounded-full text-[7px] font-bold bg-yellow-500/10 text-yellow-500 uppercase tracking-widest border border-yellow-500/20 leading-loose mt-0.5">实验性</span>
                         </div>
-                        <p className="text-xs text-text-secondary">Add your own AI endpoints via cURL.</p>
+                        <p className="text-xs text-text-secondary">通过 cURL 接入你自己的 AI 接口。</p>
                     </div>
                     {!isEditingCustom && (
                         <button
                             onClick={handleNewProvider}
                             className="flex items-center gap-2 px-3 py-1.5 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg text-xs font-medium text-text-primary transition-colors"
                         >
-                            <Plus size={14} /> Add Provider
+                            <Plus size={14} /> 添加提供商
                         </button>
                     )}
                 </div>
 
                 {isEditingCustom ? (
                     <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle animated fadeIn">
-                        <h4 className="text-sm font-bold text-text-primary mb-4">{editingProvider ? 'Edit Provider' : 'New Provider'}</h4>
+                        <h4 className="text-sm font-bold text-text-primary mb-4">{editingProvider ? '编辑提供商' : '新建提供商'}</h4>
 
                         <div className="space-y-4">
                             <div>
-                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">Provider Name</label>
+                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">提供商名称</label>
                                 <input
                                     type="text"
                                     value={customName}
                                     onChange={(e) => setCustomName(e.target.value)}
-                                    placeholder="My Custom LLM"
+                                    placeholder="我的自定义模型"
                                     className="w-full bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
                                 />
                             </div>
@@ -708,48 +812,48 @@ export const AIProvidersSettings: React.FC = () => {
 
                             <div>
                                 <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">
-                                    Response JSON Path <span className="text-text-tertiary normal-case font-normal">(Optional)</span>
+                                    响应 JSON 路径 <span className="text-text-tertiary normal-case font-normal">（可选）</span>
                                 </label>
                                 <input
                                     type="text"
                                     value={customResponsePath}
                                     onChange={(e) => setCustomResponsePath(e.target.value)}
-                                    placeholder="e.g. choices[0].message.content"
+                                    placeholder="例如：choices[0].message.content"
                                     className="w-full bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors font-mono"
                                 />
                                 <p className="text-[10px] text-text-secondary mt-1">
-                                    Dot notation path to the answer text in the JSON response. If empty, the full JSON is returned.
+                                    用点记法指定 JSON 里答案文本所在的位置；留空时会返回完整 JSON。
                                 </p>
                             </div>
 
                             <div className="bg-bg-elevated/30 rounded-lg overflow-hidden border border-border-subtle mt-4">
                                 <div className="px-4 py-3 bg-bg-elevated/50 border-b border-border-subtle flex items-center justify-between">
                                     <h5 className="block text-xs font-medium text-text-primary uppercase tracking-wide">
-                                        Configuration Guide
+                                        配置说明
                                     </h5>
                                 </div>
 
                                 <div className="p-4 space-y-4">
                                     <div>
-                                        <p className="text-xs text-text-secondary mb-2 font-medium">Available Variables</p>
+                                        <p className="text-xs text-text-secondary mb-2 font-medium">可用变量</p>
                                         <div className="grid grid-cols-1 gap-2">
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{TEXT}}"}</code>
-                                                <span className="text-text-tertiary">Combined System + Context + Message (Recommended)</span>
+                                                <span className="text-text-tertiary">系统提示词 + 上下文 + 用户消息的合并内容（推荐）</span>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64}}"}</code>
-                                                <span className="text-text-tertiary">Screenshot data (if available)</span>
+                                                <span className="text-text-tertiary">截图数据（如果有）</span>
                                             </div>
                                         </div>
                                     </div>
 
                                     <div>
-                                        <p className="text-xs text-text-secondary mb-2 font-medium">Examples</p>
+                                        <p className="text-xs text-text-secondary mb-2 font-medium">示例</p>
                                         <div className="space-y-3">
                                             {/* Ollama Example */}
                                             <div>
-                                                <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1.5">Local (Ollama)</div>
+                                                <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1.5">本地（Ollama）</div>
                                                 <div className="bg-bg-input p-2.5 rounded-lg border border-border-subtle overflow-x-auto group relative">
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         curl http://localhost:11434/api/generate -d '{"{"}"model": "llama3", "prompt": "{`{{TEXT}}`}"{"}"}'
@@ -759,7 +863,7 @@ export const AIProvidersSettings: React.FC = () => {
 
                                             {/* OpenAI Example */}
                                             <div>
-                                                <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1.5">OpenAI Compatible</div>
+                                                <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1.5">兼容 OpenAI</div>
                                                 <div className="bg-bg-input p-2.5 rounded-lg border border-border-subtle overflow-x-auto">
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         {`curl https://api.openai.com/v1/chat/completions \\
@@ -788,18 +892,54 @@ export const AIProvidersSettings: React.FC = () => {
                                 </div>
                             )}
 
+                            {testStatus[customEditorTestKey] === 'error' && testError[customEditorTestKey] && (
+                                <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-xs">
+                                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                                    <span>{testError[customEditorTestKey]}</span>
+                                </div>
+                            )}
+
+                            {renderCustomProviderPreview(customEditorTestKey)}
+
                             <div className="flex justify-end gap-3 pt-2">
+                                <button
+                                    onClick={() => handleTestCustomConnection({
+                                        id: editingProvider?.id || 'draft',
+                                        name: customName || 'Custom Provider',
+                                        curlCommand: customCurl,
+                                        responsePath: customResponsePath
+                                    }, customEditorTestKey)}
+                                    disabled={!customCurl.trim() || testStatus[customEditorTestKey] === 'testing'}
+                                    className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 border ${
+                                        testStatus[customEditorTestKey] === 'success'
+                                            ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                                            : testStatus[customEditorTestKey] === 'error'
+                                                ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                                : 'bg-bg-input hover:bg-bg-elevated border-border-subtle text-text-primary disabled:opacity-50'
+                                    }`}
+                                >
+                                    {/*
+                                    {testStatus[customEditorTestKey] === 'testing' ? <><Loader2 size={14} className="animate-spin" /> 娴嬭瘯涓?..</> :
+                                        testStatus[customEditorTestKey] === 'success' ? <><CheckCircle size={14} /> 宸茶繛鎺?/></> :
+                                            testStatus[customEditorTestKey] === 'error' ? <><AlertCircle size={14} /> 閿欒</> :
+                                                <>娴嬭瘯杩炴帴</>}
+                                    */}
+                                    {testStatus[customEditorTestKey] === 'testing' ? <><Loader2 size={14} className="animate-spin" /> Testing...</> :
+                                        testStatus[customEditorTestKey] === 'success' ? <><CheckCircle size={14} /> Connected</> :
+                                            testStatus[customEditorTestKey] === 'error' ? <><AlertCircle size={14} /> Error</> :
+                                                <>Test Connection</>}
+                                </button>
                                 <button
                                     onClick={() => setIsEditingCustom(false)}
                                     className="px-4 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-bg-input transition-colors"
                                 >
-                                    Cancel
+                                    取消
                                 </button>
                                 <button
                                     onClick={handleSaveCustom}
                                     className="px-4 py-2 rounded-lg text-xs font-medium bg-accent-primary text-white hover:bg-accent-secondary transition-colors flex items-center gap-2"
                                 >
-                                    <Save size={14} /> Save Provider
+                                    <Save size={14} /> 保存提供商
                                 </button>
                             </div>
                         </div>
@@ -808,11 +948,12 @@ export const AIProvidersSettings: React.FC = () => {
                     <div className="space-y-3">
                         {customProviders.length === 0 ? (
                             <div className="text-center py-8 bg-bg-item-surface rounded-xl border border-border-subtle border-dashed">
-                                <p className="text-xs text-text-tertiary">No custom providers added yet.</p>
+                                <p className="text-xs text-text-tertiary">还没有添加自定义提供商。</p>
                             </div>
                         ) : (
                             customProviders.map((provider) => (
-                                <div key={provider.id} className="bg-bg-item-surface rounded-xl p-4 border border-border-subtle flex items-center justify-between group">
+                                <div key={provider.id} className="bg-bg-item-surface rounded-xl p-4 border border-border-subtle flex flex-col gap-3 group">
+                                    <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
                                         <div className="w-8 h-8 rounded-lg bg-bg-input flex items-center justify-center text-text-secondary font-mono text-xs font-bold">
                                             {provider.name.substring(0, 2).toUpperCase()}
@@ -824,27 +965,46 @@ export const AIProvidersSettings: React.FC = () => {
                                             </p>
                                             {provider.responsePath && (
                                                 <p className="text-[9px] text-text-tertiary font-mono opacity-40 mt-0.5">
-                                                    path: {provider.responsePath}
+                                                    路径：{provider.responsePath}
                                                 </p>
                                             )}
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex items-center gap-2 transition-opacity">
+                                        <button
+                                            onClick={() => handleTestCustomConnection(provider)}
+                                            disabled={testStatus[getCustomProviderTestKey(provider.id)] === 'testing'}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 border ${
+                                                testStatus[getCustomProviderTestKey(provider.id)] === 'success'
+                                                    ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                                                    : testStatus[getCustomProviderTestKey(provider.id)] === 'error'
+                                                        ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                                        : 'bg-bg-input hover:bg-bg-elevated border-border-subtle text-text-primary'
+                                            }`}
+                                            title={testError[getCustomProviderTestKey(provider.id)] || 'Test Connection'}
+                                        >
+                                            {testStatus[getCustomProviderTestKey(provider.id)] === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
+                                                testStatus[getCustomProviderTestKey(provider.id)] === 'success' ? <><CheckCircle size={12} /> Connected</> :
+                                                    testStatus[getCustomProviderTestKey(provider.id)] === 'error' ? <><AlertCircle size={12} /> Error</> :
+                                                        <>Test Connection</>}
+                                        </button>
                                         <button
                                             onClick={() => handleEditProvider(provider)}
                                             className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
-                                            title="Edit"
+                                            title="编辑"
                                         >
                                             <Edit2 size={14} />
                                         </button>
                                         <button
                                             onClick={() => handleDeleteCustom(provider.id)}
                                             className="p-1.5 rounded-lg text-text-secondary hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                                            title="Delete"
+                                            title="删除"
                                         >
                                             <Trash2 size={14} />
                                         </button>
                                     </div>
+                                    </div>
+                                    {renderCustomProviderPreview(getCustomProviderTestKey(provider.id))}
                                 </div>
                             ))
                         )}

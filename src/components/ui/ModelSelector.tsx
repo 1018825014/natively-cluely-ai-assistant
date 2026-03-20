@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Check, Cloud, Terminal, Monitor, Server, Plus } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown, Check, Cloud, Terminal, Monitor, Server } from 'lucide-react';
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 
 interface ModelSelectorProps {
@@ -21,59 +21,69 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
     const [cloudModels, setCloudModels] = useState<{ id: string; name: string; desc: string; provider: string }[]>([]);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    // Close on click outside
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsOpen(false);
             }
         };
+
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Load Data
     useEffect(() => {
         if (!isOpen) return;
 
         const loadData = async () => {
             try {
-                // Load Custom
                 const custom = await window.electronAPI?.getCustomProviders() as CustomProvider[];
-                if (custom) setCustomProviders(custom);
+                if (custom) {
+                    setCustomProviders(custom);
+                }
 
-                // Load Ollama
                 const local = await window.electronAPI?.getAvailableOllamaModels() as string[];
-                if (local) setOllamaModels(local);
+                if (local) {
+                    setOllamaModels(local);
+                }
 
-                // Build dynamic cloud models from credentials
                 // @ts-ignore
                 const creds = await window.electronAPI?.getStoredCredentials?.();
-                const cModels: { id: string; name: string; desc: string; provider: string }[] = [];
+                const nextCloudModels: { id: string; name: string; desc: string; provider: string }[] = [];
+
                 for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
                     if (!cfg.hasKeyCheck(creds)) continue;
-                    cfg.ids.forEach((id, i) => cModels.push({ id, name: cfg.names[i], desc: cfg.descs[i], provider: prov }));
-                    const pm = creds?.[cfg.pmKey];
-                    if (pm && !cfg.ids.includes(pm)) {
-                        cModels.push({ id: pm, name: prettifyModelId(pm), desc: `${prov.charAt(0).toUpperCase() + prov.slice(1)} • Preferred`, provider: prov });
+
+                    cfg.ids.forEach((id, i) => {
+                        nextCloudModels.push({
+                            id,
+                            name: cfg.names[i],
+                            desc: cfg.descs[i],
+                            provider: prov,
+                        });
+                    });
+
+                    const preferredModel = creds?.[cfg.pmKey];
+                    if (preferredModel && !cfg.ids.includes(preferredModel)) {
+                        nextCloudModels.push({
+                            id: preferredModel,
+                            name: prettifyModelId(preferredModel),
+                            desc: `${prov.charAt(0).toUpperCase() + prov.slice(1)} 首选`,
+                            provider: prov,
+                        });
                     }
                 }
-                setCloudModels(cModels);
+
+                setCloudModels(nextCloudModels);
             } catch (e) {
                 console.error("Failed to load models:", e);
             }
         };
+
         loadData();
     }, [isOpen]);
 
     const handleSelect = (model: string) => {
-        // For custom/local, we might need to pass an ID or specific format
-        // The backend logic (LLMHelper) needs to know how to handle this string or we need a richer object
-        // For now, consistent with existing app, we pass a string. 
-        // We'll rely on a prefix convention or just the name if unique enough, 
-        // OR the app state handling this selection needs to store provider type.
-        // Assuming onSelectModel handles the switching logic.
-
         onSelectModel(model);
         setIsOpen(false);
     };
@@ -86,13 +96,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
         if (model === 'gpt-5.4') return 'GPT 5.4';
         if (model === 'claude-sonnet-4-6') return 'Sonnet 4.6';
 
-        // Check dynamic cloud models
-        const cloud = cloudModels.find(m => m.id === model);
-        if (cloud) return cloud.name;
+        const cloudModel = cloudModels.find((item) => item.id === model);
+        if (cloudModel) return cloudModel.name;
 
-        // Check custom providers
-        const custom = customProviders.find(p => p.id === model || p.name === model);
-        if (custom) return custom.name;
+        const customProvider = customProviders.find((item) => item.id === model || item.name === model);
+        if (customProvider) return customProvider.name;
 
         return model;
     };
@@ -109,54 +117,51 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
 
             {isOpen && (
                 <div className="absolute bottom-full left-0 mb-2 w-64 bg-bg-item-surface border border-border-subtle rounded-xl shadow-xl z-50 overflow-hidden animated fadeIn">
-                    {/* Tabs */}
                     <div className="flex border-b border-border-subtle bg-bg-input/50">
                         <button
                             onClick={() => setActiveTab('cloud')}
                             className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === 'cloud' ? 'text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                            Cloud
+                            云端
                         </button>
                         <button
                             onClick={() => setActiveTab('custom')}
                             className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === 'custom' ? 'text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                            Custom
+                            自定义
                         </button>
                         <button
                             onClick={() => setActiveTab('local')}
                             className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === 'local' ? 'text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                            Local
+                            本地
                         </button>
                     </div>
 
-                    {/* Content */}
                     <div className="p-2 max-h-64 overflow-y-auto">
-
-                        {/* Cloud Models */}
                         {activeTab === 'cloud' && (
                             <div className="space-y-1">
                                 {cloudModels.length === 0 ? (
                                     <div className="text-center py-6 text-text-tertiary">
-                                        <p className="text-xs mb-2">No cloud providers configured.</p>
-                                        <p className="text-[10px] opacity-70">Add API keys in Settings.</p>
+                                        <p className="text-xs mb-2">还没有配置云端提供商。</p>
+                                        <p className="text-[10px] opacity-70">去设置里添加 API Key。</p>
                                     </div>
                                 ) : (
-                                    cloudModels.map((m, idx) => {
+                                    cloudModels.map((model, idx) => {
                                         const prevProvider = idx > 0 ? cloudModels[idx - 1].provider : null;
-                                        const showDivider = prevProvider && prevProvider !== m.provider;
-                                        const icon = m.provider === 'gemini' ? <Monitor size={14} /> : <Cloud size={14} />;
+                                        const showDivider = prevProvider && prevProvider !== model.provider;
+                                        const icon = model.provider === 'gemini' ? <Monitor size={14} /> : <Cloud size={14} />;
+
                                         return (
-                                            <React.Fragment key={m.id}>
+                                            <React.Fragment key={model.id}>
                                                 {showDivider && <div className="h-px bg-border-subtle my-1" />}
                                                 <ModelOption
-                                                    id={m.id}
-                                                    name={m.name}
-                                                    desc={m.desc}
+                                                    id={model.id}
+                                                    name={model.name}
+                                                    desc={model.desc}
                                                     icon={icon}
-                                                    selected={currentModel === m.id}
-                                                    onSelect={() => handleSelect(m.id)}
+                                                    selected={currentModel === model.id}
+                                                    onSelect={() => handleSelect(model.id)}
                                                 />
                                             </React.Fragment>
                                         );
@@ -165,21 +170,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                             </div>
                         )}
 
-                        {/* Custom Models */}
                         {activeTab === 'custom' && (
                             <div className="space-y-1">
                                 {customProviders.length === 0 ? (
                                     <div className="text-center py-6 text-text-tertiary">
-                                        <p className="text-xs mb-2">No custom providers.</p>
-                                        <button className="text-[10px] text-accent-primary hover:underline">Manage in Settings</button>
+                                        <p className="text-xs mb-2">还没有自定义提供商。</p>
+                                        <button className="text-[10px] text-accent-primary hover:underline">去设置里管理</button>
                                     </div>
                                 ) : (
-                                    customProviders.map(provider => (
+                                    customProviders.map((provider) => (
                                         <ModelOption
                                             key={provider.id}
                                             id={provider.id}
                                             name={provider.name}
-                                            desc="Custom cURL"
+                                            desc="自定义 cURL"
                                             icon={<Terminal size={14} />}
                                             selected={currentModel === provider.id}
                                             onSelect={() => handleSelect(provider.id)}
@@ -189,21 +193,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                             </div>
                         )}
 
-                        {/* Local Models (Ollama) */}
                         {activeTab === 'local' && (
                             <div className="space-y-1">
                                 {ollamaModels.length === 0 ? (
                                     <div className="text-center py-6 text-text-tertiary">
-                                        <p className="text-xs">No Ollama models found.</p>
-                                        <p className="text-[10px] mt-1 opacity-70">Ensure Ollama is running.</p>
+                                        <p className="text-xs">未找到 Ollama 模型。</p>
+                                        <p className="text-[10px] mt-1 opacity-70">请先确认 Ollama 正在运行。</p>
                                     </div>
                                 ) : (
-                                    ollamaModels.map(model => (
+                                    ollamaModels.map((model) => (
                                         <ModelOption
                                             key={model}
                                             id={`ollama-${model}`}
                                             name={model}
-                                            desc="Local"
+                                            desc="本地"
                                             icon={<Server size={14} />}
                                             selected={currentModel === `ollama-${model}`}
                                             onSelect={() => handleSelect(`ollama-${model}`)}

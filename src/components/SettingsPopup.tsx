@@ -169,7 +169,7 @@ const SettingsPopup = () => {
                             stroke={isUndetectable ? "none" : "currentColor"}
                             eyeColor={isUndetectable ? "black" : "white"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${isUndetectable ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{isUndetectable ? 'Undetectable' : 'Detectable'}</span>
+                        <span className={`text-[12px] font-medium transition-colors ${isUndetectable ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{isUndetectable ? '隐身模式' : '普通模式'}</span>
                     </div>
                     <button
                         onClick={() => {
@@ -186,13 +186,13 @@ const SettingsPopup = () => {
 
 
                 {/* Groq (Fast Text) Toggle */}
-                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "Requires Groq API Key to be configured in Settings" : ""}>
+                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "需要先在设置中配置 Groq API Key" : ""}>
                     <div className="flex items-center gap-3">
                         <Zap
                             className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
                             fill={useGroqFastText ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Fast Response</span>
+                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>极速回复</span>
                     </div>
                     <button
                         onClick={() => {
@@ -213,7 +213,7 @@ const SettingsPopup = () => {
                             className={`w-3.5 h-3.5 transition-colors ${showTranscript ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'}`}
                             fill={showTranscript ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${showTranscript ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Transcript</span>
+                        <span className={`text-[12px] font-medium transition-colors ${showTranscript ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>转录</span>
                     </div>
                     <button
                         onClick={() => {
@@ -231,13 +231,13 @@ const SettingsPopup = () => {
 
                 {/* Profile Mode Toggle */}
                 {hasProfile && (
-                    <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${!isPremium ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={!isPremium ? 'Requires Pro license to be active' : ''}>
+                    <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${!isPremium ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={!isPremium ? '需要激活 Pro 许可证' : ''}>
                         <div className="flex items-center gap-3">
                             <User
                                 className={`w-3.5 h-3.5 transition-colors ${profileMode && isPremium ? 'text-accent-primary' : 'text-slate-500 group-hover:text-slate-300'}`}
                                 fill={profileMode && isPremium ? "currentColor" : "none"}
                             />
-                            <span className={`text-[12px] font-medium transition-colors ${profileMode && isPremium ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Profile Mode</span>
+                            <span className={`text-[12px] font-medium transition-colors ${profileMode && isPremium ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>档案模式</span>
                         </div>
                         <button
                             onClick={async () => {
@@ -263,7 +263,7 @@ const SettingsPopup = () => {
                 <div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group interaction-base interaction-press">
                     <div className="flex items-center gap-3">
                         <MessageSquare className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition-colors" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">Show/Hide</span>
+                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">显示/隐藏</span>
                     </div>
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         {/* Dynamic Keys for Toggle Visibility */}
@@ -279,7 +279,7 @@ const SettingsPopup = () => {
                 <div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group interaction-base interaction-press">
                     <div className="flex items-center gap-3">
                         <Camera className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition-colors" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">Screenshot</span>
+                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">截图</span>
                     </div>
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         {/* Dynamic Keys for Take Screenshot */}
@@ -301,7 +301,7 @@ const SettingsPopup = () => {
                 >
                     <div className="flex items-center gap-3">
                         <Heart className="w-3.5 h-3.5 text-pink-400 group-hover:fill-pink-400 transition-all duration-300" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-pink-100 transition-colors">Donate</span>
+                        <span className="text-[12px] text-slate-400 group-hover:text-pink-100 transition-colors">支持作者</span>
                     </div>
                     <div className="opacity-60 group-hover:opacity-100 transition-opacity">
                         <Link className="w-3 h-3 text-slate-500 group-hover:text-pink-400" />

@@ -1,5 +1,5 @@
 /**
- * DeepgramStreamingSTT - WebSocket-based streaming Speech-to-Text using Deepgram Nova-2
+ * DeepgramStreamingSTT - WebSocket-based streaming Speech-to-Text using Deepgram.
  *
  * Implements the same EventEmitter interface as GoogleSTT:
  *   Events: 'transcript' ({ text, isFinal, confidence }), 'error' (Error)
@@ -25,6 +25,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     private sampleRate = 16000;
     private numChannels = 1;
+    private model = 'nova-3';
     private languageCode = 'en'; // Default to English
 
     private reconnectAttempts = 0;
@@ -35,7 +36,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     constructor(apiKey: string) {
         super();
-        this.apiKey = apiKey;
+        this.apiKey = apiKey.trim();
     }
 
     // =========================================================================
@@ -56,8 +57,17 @@ export class DeepgramStreamingSTT extends EventEmitter {
     public setRecognitionLanguage(key: string): void {
         const config = RECOGNITION_LANGUAGES[key];
         if (config) {
-            this.languageCode = config.iso639;
-            console.log(`[DeepgramStreaming] Language set to ${this.languageCode}`);
+            // Deepgram Nova-3 does not support Simplified Chinese. Fall back to
+            // Nova-2 with zh-CN for the app's built-in Chinese option.
+            if (config.iso639 === 'zh') {
+                this.model = 'nova-2';
+                this.languageCode = 'zh-CN';
+            } else {
+                this.model = 'nova-3';
+                this.languageCode = config.iso639;
+            }
+
+            console.log(`[DeepgramStreaming] Language set to ${this.languageCode} (model=${this.model})`);
 
             if (this.isActive) {
                 console.log('[DeepgramStreaming] Language changed while active. Restarting...');
@@ -135,7 +145,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
         const url =
             `wss://api.deepgram.com/v1/listen` +
-            `?model=nova-3` +
+            `?model=${this.model}` +
             `&encoding=linear16` +
             `&sample_rate=${this.sampleRate}` +
             `&channels=${this.numChannels}` +
@@ -144,7 +154,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
             `&interim_results=true` +
             `&keepalive=true`;
 
-        console.log(`[DeepgramStreaming] Connecting (rate=${this.sampleRate}, ch=${this.numChannels})...`);
+        console.log(`[DeepgramStreaming] Connecting (model=${this.model}, lang=${this.languageCode}, rate=${this.sampleRate}, ch=${this.numChannels})...`);
 
         this.ws = new WebSocket(url, {
             headers: {

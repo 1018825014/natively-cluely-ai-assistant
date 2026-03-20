@@ -4,6 +4,7 @@ logs
 release
 /release
 .release
+start-natively.local.ps1
 demo.mp4
 tmp
 .cursorrules

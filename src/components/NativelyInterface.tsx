@@ -882,7 +882,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: '⚠️ No speech detected. Try speaking closer to your microphone.'
+                    text: '⚠️ 没有检测到语音，请靠近麦克风再试一次。'
                 }]);
                 return;
             }
@@ -1065,7 +1065,7 @@ Provide only the answer, nothing else.`;
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-purple-300 font-semibold text-xs uppercase tracking-wide">
                         <Code className="w-3.5 h-3.5" />
-                        <span>Code Solution</span>
+                        <span>代码解法</span>
                     </div>
                     <div className="space-y-2 text-slate-200 text-[13px] leading-relaxed">
                         {parts.map((part, i) => {
@@ -1143,7 +1143,7 @@ Provide only the answer, nothing else.`;
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-cyan-300 font-semibold text-xs uppercase tracking-wide">
                         <MessageSquare className="w-3.5 h-3.5" />
-                        <span>Shortened</span>
+                        <span>已精简</span>
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
@@ -1164,7 +1164,7 @@ Provide only the answer, nothing else.`;
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-indigo-300 font-semibold text-xs uppercase tracking-wide">
                         <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Recap</span>
+                        <span>总结</span>
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
@@ -1185,7 +1185,7 @@ Provide only the answer, nothing else.`;
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-[#FFD60A] font-semibold text-xs uppercase tracking-wide">
                         <HelpCircle className="w-3.5 h-3.5" />
-                        <span>Follow-Up Questions</span>
+                        <span>追问问题</span>
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
@@ -1208,7 +1208,7 @@ Provide only the answer, nothing else.`;
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-emerald-400 font-semibold text-xs uppercase tracking-wide">
-                        <span>Say this</span>
+                        <span>你可以这样说</span>
                     </div>
                     <div className="text-slate-100 text-[14px] leading-relaxed">
                         {parts.map((part, i) => {
@@ -1543,14 +1543,14 @@ Provide only the answer, nothing else.`;
                     `}>
                                                 {msg.role === 'interviewer' && (
                                                     <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
-                                                        Interviewer
+                                                        面试官
                                                         {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
                                                     </div>
                                                 )}
                                                 {msg.role === 'user' && msg.hasScreenshot && (
                                                     <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
                                                         <Image className="w-2.5 h-2.5" />
-                                                        <span>Screenshot attached</span>
+                                                        <span>已附加截图</span>
                                                     </div>
                                                 )}
                                                 {msg.role === 'system' && !msg.isStreaming && (
@@ -1581,7 +1581,7 @@ Provide only the answer, nothing else.`;
                                                 <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                                                 <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                                                 <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                                                <span className="text-[10px] text-emerald-400/70 ml-1">Listening...</span>
+                                                <span className="text-[10px] text-emerald-400/70 ml-1">正在聆听...</span>
                                             </div>
                                         </div>
                                     )}
@@ -1602,16 +1602,16 @@ Provide only the answer, nothing else.`;
                             {/* Quick Actions - Minimal & Clean */}
                             <div className={`flex flex-nowrap justify-center items-center gap-1.5 px-4 pb-3 overflow-x-hidden ${rollingTranscript && showTranscript ? 'pt-1' : 'pt-3'}`}>
                                 <button onClick={handleWhatToSay} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <Pencil className="w-3 h-3 opacity-70" /> What to answer?
+                                    <Pencil className="w-3 h-3 opacity-70" /> 怎么回答？
                                 </button>
                                 <button onClick={() => handleFollowUp('shorten')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <MessageSquare className="w-3 h-3 opacity-70" /> Shorten
+                                    <MessageSquare className="w-3 h-3 opacity-70" /> 精简一下
                                 </button>
                                 <button onClick={handleRecap} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <RefreshCw className="w-3 h-3 opacity-70" /> Recap
+                                    <RefreshCw className="w-3 h-3 opacity-70" /> 总结一下
                                 </button>
                                 <button onClick={handleFollowUpQuestions} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <HelpCircle className="w-3 h-3 opacity-70" /> Follow Up Question
+                                    <HelpCircle className="w-3 h-3 opacity-70" /> 继续追问
                                 </button>
                                 <button
                                     onClick={handleAnswerNow}
@@ -1623,10 +1623,10 @@ Provide only the answer, nothing else.`;
                                     {isManualRecording ? (
                                         <>
                                             <div className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                                            Stop
+                                            停止
                                         </>
                                     ) : (
-                                        <><Zap className="w-3 h-3 opacity-70" /> Answer</>
+                                        <><Zap className="w-3 h-3 opacity-70" /> 回答</>
                                     )}
                                 </button>
                             </div>
@@ -1638,7 +1638,7 @@ Provide only the answer, nothing else.`;
                                     <div className="mb-2 bg-white/5 border border-white/10 rounded-lg p-2 transition-all duration-200">
                                         <div className="flex items-center justify-between mb-1.5">
                                             <span className="text-[11px] font-medium text-white">
-                                                {attachedContext.length} screenshot{attachedContext.length > 1 ? 's' : ''} attached
+                                                已附加 {attachedContext.length} 张截图
                                             </span>
                                             <button
                                                 onClick={() => setAttachedContext([])}
@@ -1658,14 +1658,14 @@ Provide only the answer, nothing else.`;
                                                     <button
                                                         onClick={() => setAttachedContext(prev => prev.filter((_, i) => i !== idx))}
                                                         className="absolute -top-1 -right-1 w-4 h-4 bg-red-500/80 hover:bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity"
-                                                        title="Remove"
+                                                        title="移除"
                                                     >
                                                         <X className="w-2.5 h-2.5 text-white" />
                                                     </button>
                                                 </div>
                                             ))}
                                         </div>
-                                        <span className="text-[10px] text-slate-400">Ask a question or click Answer</span>
+                                        <span className="text-[10px] text-slate-400">输入问题，或直接点击“回答”</span>
                                     </div>
                                 )}
 
@@ -1698,7 +1698,7 @@ Provide only the answer, nothing else.`;
                                     {/* Custom Rich Placeholder */}
                                     {!inputValue && (
                                         <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] text-slate-400">
-                                            <span>Ask anything on screen or conversation, or</span>
+                                            <span>可以问屏幕内容或当前对话里的任何问题，或者</span>
                                             <div className="flex items-center gap-1 opacity-80">
                                                 {(shortcuts.selectiveScreenshot || ['⌘', 'Shift', 'H']).map((key, i) => (
                                                     <React.Fragment key={i}>
@@ -1707,7 +1707,7 @@ Provide only the answer, nothing else.`;
                                                     </React.Fragment>
                                                 ))}
                                             </div>
-                                            <span>for selective screenshot</span>
+                                            <span>进行区域截图</span>
                                         </div>
                                     )}
 
@@ -1790,7 +1790,7 @@ Provide only the answer, nothing else.`;
                                             interaction-base interaction-press
                                             ${isSettingsOpen ? 'text-white bg-white/10' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}
                                         `}
-                                                title="Settings"
+                                                title="设置"
                                             >
                                                 <SlidersHorizontal className="w-3.5 h-3.5" />
                                             </button>

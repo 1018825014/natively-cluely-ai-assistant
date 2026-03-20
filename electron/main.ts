@@ -864,15 +864,9 @@ export class AppState {
 
     try {
       this.audioTestCapture = new MicrophoneCapture(deviceId || undefined);
-      this.audioTestCapture.start();
-
-      // Send to settings window if open, else main window
-      const win = this.settingsWindowHelper.getSettingsWindow() || this.getMainWindow();
 
       this.audioTestCapture.on('data', (chunk: Buffer) => {
         // Calculate basic RMS for level meter
-        if (!win || win.isDestroyed()) return;
-
         let sum = 0;
         const step = 10;
         const len = chunk.length;
@@ -887,13 +881,15 @@ export class AppState {
           const rms = Math.sqrt(sum / count);
           // Normalize 0-1 (heuristic scaling, max comfortable mic input is around 10000-20000)
           const level = Math.min(rms / 10000, 1.0);
-          win.webContents.send('audio-level', level);
+          this.broadcast('audio-test-level', level);
         }
       });
 
       this.audioTestCapture.on('error', (err: Error) => {
         console.error('[Main] AudioTest Error:', err);
       });
+
+      this.audioTestCapture.start();
 
     } catch (err) {
       console.error('[Main] Failed to start audio test:', err);
@@ -906,6 +902,7 @@ export class AppState {
       this.audioTestCapture.stop();
       this.audioTestCapture = null;
     }
+    this.broadcast('audio-test-level', 0);
   }
 
   public finalizeMicSTT(): void {

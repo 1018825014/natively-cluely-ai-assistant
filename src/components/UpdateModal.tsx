@@ -35,9 +35,9 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
 }) => {
     // Helper to format version string
     const formatVersion = (v: string) => {
-        if (!v) return 'Unknown';
-        if (v === 'latest') return 'Latest';
-        if (v === 'vlatest') return 'Latest';
+        if (!v) return '未知版本';
+        if (v === 'latest') return '最新版本';
+        if (v === 'vlatest') return '最新版本';
         return v.startsWith('v') ? v : `v${v}`;
     };
 
@@ -134,10 +134,10 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                 {/* 1. Header Text */}
                                 <div className="space-y-1.5 mb-8">
                                     <h2 className="text-[17px] font-semibold text-white tracking-tight">
-                                        Downloading Update...
+                                        正在下载更新...
                                     </h2>
                                     <p className="text-[13px] text-white/40 font-medium">
-                                        {downloadProgress < 100 ? 'Please wait while we prepare the update.' : 'Finalizing package...'}
+                                        {downloadProgress < 100 ? '正在准备更新，请稍候。' : '正在完成安装包...'}
                                     </p>
                                 </div>
 
@@ -152,10 +152,10 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                         </div>
                                         <div className="space-y-0.5">
                                             <p className="text-[12px] font-medium text-white/80 leading-tight">
-                                                If macOS says "App is damaged"
+                                                如果 macOS 提示“App is damaged”
                                             </p>
                                             <p className="text-[11px] text-white/40 leading-snug">
-                                                Move app to Applications folder, then run:
+                                                先将应用移动到 Applications 文件夹，再执行：
                                             </p>
                                         </div>
                                     </div>
@@ -168,12 +168,12 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                         <button
                                             onClick={handleCopyCommand}
                                             className="h-6 px-2.5 rounded-md bg-white/5 hover:bg-white/10 active:bg-white/15 flex items-center justify-center transition-colors border border-white/5"
-                                            title="Copy to clipboard"
+                                            title="复制到剪贴板"
                                         >
                                             {copied ? (
-                                                <span className="text-[10px] font-semibold text-green-400">Copied</span>
+                                                <span className="text-[10px] font-semibold text-green-400">已复制</span>
                                             ) : (
-                                                <span className="text-[10px] font-medium text-white/50 group-hover:text-white/80">Copy</span>
+                                                <span className="text-[10px] font-medium text-white/50 group-hover:text-white/80">复制</span>
                                             )}
                                         </button>
                                     </div>
@@ -190,7 +190,7 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                         />
                                     </div>
                                     <p className="text-[11px] font-medium text-white/30 tabular-nums">
-                                        {Math.round(downloadProgress)}% Complete
+                                        已完成 {Math.round(downloadProgress)}%
                                     </p>
                                 </div>
 
@@ -198,7 +198,7 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                     onClick={onDismiss}
                                     className="text-[13px] font-medium text-white/30 hover:text-white/60 transition-colors mt-auto mb-1"
                                 >
-                                    Hide
+                                    隐藏
                                 </button>
                             </div>
                         ) : (
@@ -206,10 +206,10 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                 {/* Header Group */}
                                 <div className="flex flex-col gap-0.5 text-center relative flex-shrink-0 pt-1">
                                     <h2 className="text-[19px] font-semibold text-white tracking-tight">
-                                        Update Available
+                                        发现新版本
                                     </h2>
                                     <p className="text-[13px] text-white/50 font-medium tracking-wide">
-                                        Version {displayVersion} is ready to install.
+                                        版本 {displayVersion} 已可安装。
                                     </p>
                                 </div>
 
@@ -223,7 +223,7 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                 >
                                     {showFallback ? (
                                         <p className="text-[13px] text-white/60 text-center leading-relaxed mt-8">
-                                            Includes performance improvements and bug fixes.
+                                            本次更新包含性能优化和问题修复。
                                         </p>
                                     ) : (
                                         <div className="space-y-5 px-1">
@@ -261,7 +261,7 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                         onClick={onDismiss}
                                         className="text-[13px] font-medium text-white/40 hover:text-white/70 transition-colors"
                                     >
-                                        Not Now
+                                        暂时不用
                                     </button>
 
                                     {/* Primary Action - Right Aligned, System Blue */}
@@ -270,14 +270,14 @@ const UpdateModal: React.FC<UpdateModalProps> = ({
                                             onClick={() => window.electronAPI.restartAndInstall()}
                                             className="px-5 py-[6px] bg-[#007AFF] hover:bg-[#0062CC] text-white text-[13px] font-medium rounded-lg shadow-sm transition-colors"
                                         >
-                                            Restart & Install
+                                            重启并安装
                                         </button>
                                     ) : (
                                         <button
                                             onClick={handleUpdateClick}
                                             className="px-5 py-[6px] bg-[#007AFF] hover:bg-[#0062CC] text-white text-[13px] font-medium rounded-lg shadow-sm transition-colors"
                                         >
-                                            Update Now
+                                            立即更新
                                         </button>
                                     )}
                                 </div>

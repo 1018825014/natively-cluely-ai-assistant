@@ -77,30 +77,30 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
     return (
         <div className="space-y-8 animated fadeIn">
             <div>
-                <h3 className="text-lg font-bold text-text-primary mb-2">General Configuration</h3>
-                <p className="text-xs text-text-secondary mb-4">Core settings for Natively.</p>
+                <h3 className="text-lg font-bold text-text-primary mb-2">通用设置</h3>
+                <p className="text-xs text-text-secondary mb-4">Natively 的基础设置。</p>
 
                 <div className="space-y-4">
                     {/* Google Cloud Service Account */}
                     <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">Google Speech-to-Text Key (JSON)</label>
+                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">Google Speech-to-Text 密钥（JSON）</label>
                         <div className="flex gap-3">
                             <div className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-secondary truncate flex items-center">
-                                {serviceAccountPath || "No file selected"}
+                                {serviceAccountPath || "未选择文件"}
                             </div>
                             <button
                                 onClick={handleSelectServiceAccount}
                                 className="bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary px-5 py-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
                             >
-                                Select File
+                                选择文件
                             </button>
                         </div>
-                        <p className="text-xs text-text-tertiary mt-2">Required for accurate speech recognition.</p>
+                        <p className="text-xs text-text-tertiary mt-2">用于更准确的语音识别。</p>
                     </div>
 
                     {/* Recognition Language */}
                     <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">Recognition Language (STT)</label>
+                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">识别语言（STT）</label>
                         <div className="relative inline-block">
                             <select
                                 value={recognitionLanguage}
@@ -115,12 +115,12 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
                             </select>
                             <Globe size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
                         </div>
-                        <p className="text-xs text-text-tertiary mt-2">The language you and the interviewer are speaking.</p>
+                        <p className="text-xs text-text-tertiary mt-2">你和面试官当前使用的语言。</p>
                     </div>
 
                     {/* AI Response Language */}
                     <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">AI Response Language</label>
+                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">AI 回复语言</label>
                         <div className="relative inline-block">
                             <select
                                 value={aiResponseLanguage}
@@ -135,7 +135,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
                             </select>
                             <Info size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
                         </div>
-                        <p className="text-xs text-text-tertiary mt-2">The language in which the AI will provide its suggestions.</p>
+                        <p className="text-xs text-text-tertiary mt-2">AI 建议内容将使用这门语言输出。</p>
                     </div>
                 </div>
             </div>

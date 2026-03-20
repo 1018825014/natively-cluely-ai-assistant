@@ -55,13 +55,13 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
         <div className="space-y-6 animated fadeIn pb-10">
             {/* Header */}
             <div>
-                <h3 className="text-lg font-bold text-text-primary mb-1">About Natively</h3>
-                <p className="text-sm text-text-secondary">Designed to be invisible, intelligent, and trusted.</p>
+                <h3 className="text-lg font-bold text-text-primary mb-1">关于 Natively</h3>
+                <p className="text-sm text-text-secondary">低调隐形、足够聪明，也让人放心。</p>
             </div>
 
             {/* What's New Section */}
             <div>
-                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">What's New in v2.0</h4>
+                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">v2.0 新功能</h4>
                 <div className="bg-bg-item-surface rounded-xl border border-border-subtle overflow-hidden">
                     <div className="p-3 border-b border-border-subtle bg-bg-card/50">
                         <div className="flex items-start gap-4">
@@ -69,9 +69,9 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Sparkles size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary mb-1">Premium Profile Intelligence</h5>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">高级求职画像</h5>
                                 <p className="text-xs text-text-secondary leading-relaxed">
-                                    Upload your Resume & Job Description for hyper-personalized interview assistance, company research, and salary negotiation tactics.
+                                    上传简历和职位描述后，就能获得更贴合个人背景的面试辅助、公司研究和薪资谈判建议。
                                 </p>
                             </div>
                         </div>
@@ -83,9 +83,9 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Zap size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary mb-1">Live Meeting RAG</h5>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">实时会议 RAG</h5>
                                 <p className="text-xs text-text-secondary leading-relaxed">
-                                    Instant intelligent retrieval of context directly during a live meeting using local vectors.
+                                    在会议进行中，基于本地向量即时检索上下文信息。
                                 </p>
                             </div>
                         </div>
@@ -97,9 +97,9 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Globe size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary mb-1">Soniox & Multilingual</h5>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">Soniox 与多语言支持</h5>
                                 <p className="text-xs text-text-secondary leading-relaxed">
-                                    Ultra-fast streaming STT with Soniox. Set speech recognition specific to accents, dialects, and varied AI response languages.
+                                    接入 Soniox 的超高速流式语音识别，并可按口音、方言和 AI 回复语言做更细致的设置。
                                 </p>
                             </div>
                         </div>
@@ -109,7 +109,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
 
             {/* Architecture Section */}
             <div>
-                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">How Natively Works</h4>
+                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">Natively 如何工作</h4>
                 <div className="bg-bg-item-surface rounded-xl border border-border-subtle overflow-hidden">
                     <div className="p-3 border-b border-border-subtle bg-bg-card/50">
                         <div className="flex items-start gap-4">
@@ -117,9 +117,9 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Cpu size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary mb-1">Hybrid Intelligence</h5>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">混合智能路由</h5>
                                 <p className="text-xs text-text-secondary leading-relaxed">
-                                    Seamlessly routes queries between ultra-fast models for instant speed and reasoning models (Gemini, OpenAI, Claude) for complex tasks. Powered by enterprise-grade speech recognition from 7+ providers.
+                                    在追求速度时自动切到超快模型，在复杂任务上使用 Gemini、OpenAI、Claude 等推理模型；同时接入 7 家以上企业级语音识别服务。
                                 </p>
                             </div>
                         </div>
@@ -131,9 +131,9 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Database size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary mb-1">Local RAG & Memory</h5>
+                                <h5 className="text-sm font-bold text-text-primary mb-1">本地 RAG 与记忆</h5>
                                 <p className="text-xs text-text-secondary leading-relaxed">
-                                    A purely local vector memory system allows Natively to recall details from past meetings. Embeddings and retrieval happen on-device via SQLite for maximum privacy.
+                                    纯本地向量记忆让 Natively 能回忆过往会议细节，Embedding 和检索都在设备上的 SQLite 中完成，尽量保护隐私。
                                 </p>
                             </div>
                         </div>
@@ -143,23 +143,23 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
 
             {/* Privacy Section */}
             <div>
-                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">Privacy & Data</h4>
+                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">隐私与数据</h4>
                 <div className="bg-bg-item-surface rounded-xl border border-border-subtle p-5 space-y-4">
                     <div className="flex items-start gap-3">
                         <Shield size={16} className="text-green-400 mt-0.5" />
                         <div>
-                            <h5 className="text-sm font-medium text-text-primary">Stealth & Control</h5>
+                            <h5 className="text-sm font-medium text-text-primary">隐形与可控</h5>
                             <p className="text-xs text-text-secondary mt-1 leading-relaxed">
-                                Features "Undetectable Mode" to hide from the dock and "Masquerading" to disguise as system apps. You control exactly what data leaves your device.
+                                支持用 “Undetectable Mode” 隐藏 Dock，也能伪装成系统应用。哪些数据会离开你的设备，由你自己决定。
                             </p>
                         </div>
                     </div>
                     <div className="flex items-start gap-3">
                         <MicOff size={16} className="text-red-500 mt-0.5" />
                         <div>
-                            <h5 className="text-sm font-medium text-text-primary">No Recording</h5>
+                            <h5 className="text-sm font-medium text-text-primary">不做后台录制</h5>
                             <p className="text-xs text-text-secondary mt-1 leading-relaxed">
-                                Natively listens only when active. It does not record video, take arbitrary screenshots without command, or perform background surveillance.
+                                只有在你主动启用时才会监听，不会偷偷录视频、不会未经指令随意截图，也不会做后台监控。
                             </p>
                         </div>
                     </div>
@@ -172,7 +172,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
 
             {/* Community Section */}
             <div>
-                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">Community</h4>
+                <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-2 px-1">社区</h4>
                 <div className="space-y-4">
                     {/* 0. Official Website */}
                     <div className="bg-bg-item-surface rounded-xl border border-border-subtle p-5 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -181,7 +181,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Globe size={18} className="opacity-80" />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary">Official Website</h5>
+                                <h5 className="text-sm font-bold text-text-primary">官网</h5>
                             </div>
                         </div>
                         <a
@@ -190,7 +190,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                             className="whitespace-nowrap px-4 py-2 bg-text-primary hover:bg-white/90 text-bg-main text-xs font-bold rounded-lg transition-all shadow hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 flex items-center gap-2"
                         >
                             <Globe size={14} />
-                            Visit Website
+                            访问官网
                         </a>
                     </div>
 
@@ -204,12 +204,12 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <div className="pt-0.5">
                                     <div className="flex items-center gap-2 mb-1">
                                         <h5 className="text-sm font-bold text-text-primary">Evin John</h5>
-                                        <span className="text-[10px] font-medium px-1.5 py-[1px] rounded-full bg-yellow-400/10 text-yellow-200 border border-yellow-400/5">Creator</span>
+                                        <span className="text-[10px] font-medium px-1.5 py-[1px] rounded-full bg-yellow-400/10 text-yellow-200 border border-yellow-400/5">作者</span>
                                     </div>
                                     <p className="text-xs text-text-secondary leading-relaxed max-w-lg">
-                                        I build software that stays out of the way.
+                                        我做的软件，应该安静地帮上忙，而不是挡在前面。
                                         <br />
-                                        <span className="font-bold text-text-primary">Natively</span> is made to feel fast, quiet, and respectful of your privacy.
+                                        <span className="font-bold text-text-primary">Natively</span> 想带来的就是快、安静，以及对隐私的尊重。
                                     </p>
                                 </div>
                             </div>
@@ -261,8 +261,8 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Star size={20} className="transition-all group-hover:fill-current" />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary">Star on GitHub</h5>
-                                <p className="text-xs text-text-secondary mt-0.5">Love Natively? Support us by starring the repo.</p>
+                                <h5 className="text-sm font-bold text-text-primary">在 GitHub 点个 Star</h5>
+                                <p className="text-xs text-text-secondary mt-0.5">如果喜欢 Natively，欢迎给仓库点个 Star 支持一下。</p>
                             </div>
                         </a>
 
@@ -275,8 +275,8 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Bug size={20} />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary">Report an Issue</h5>
-                                <p className="text-xs text-text-secondary mt-0.5">Found a bug? Let us know so we can fix it.</p>
+                                <h5 className="text-sm font-bold text-text-primary">反馈问题</h5>
+                                <p className="text-xs text-text-secondary mt-0.5">如果你发现了 bug，告诉我们，我们会尽快修。</p>
                             </div>
                         </a>
                     </div>
@@ -288,8 +288,8 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Mail size={18} className="opacity-80" />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary">Get in Touch</h5>
-                                <p className="text-xs text-text-secondary mt-0.5">Open for professional collaborations and job offers.</p>
+                                <h5 className="text-sm font-bold text-text-primary">联系我</h5>
+                                <p className="text-xs text-text-secondary mt-0.5">欢迎合作邀约和工作机会。</p>
                             </div>
                         </div>
                         <a
@@ -298,7 +298,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                             className="whitespace-nowrap px-4 py-2 bg-text-primary hover:bg-white/90 text-bg-main text-xs font-bold rounded-lg transition-all shadow hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 flex items-center gap-2"
                         >
                             <Mail size={14} />
-                            Contact Me
+                            联系我
                         </a>
                     </div>
 
@@ -309,8 +309,8 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                                 <Heart size={18} fill="currentColor" className="opacity-80" />
                             </div>
                             <div>
-                                <h5 className="text-sm font-bold text-text-primary">Support Development</h5>
-                                <p className="text-xs text-text-secondary mt-0.5">Natively is independent open-source software.</p>
+                                <h5 className="text-sm font-bold text-text-primary">支持开发</h5>
+                                <p className="text-xs text-text-secondary mt-0.5">Natively 是独立维护的开源软件。</p>
                             </div>
                         </div>
                         <a
@@ -318,7 +318,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
                             onClick={(e) => handleOpenLink(e, "https://buymeacoffee.com/evinjohnn")}
                             className="whitespace-nowrap px-4 py-2 bg-text-primary hover:bg-white/90 text-bg-main text-xs font-bold rounded-lg transition-all shadow hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
                         >
-                            Support Project
+                            支持项目
                         </a>
                     </div>
                 </div>
@@ -327,7 +327,7 @@ export const AboutSection: React.FC<AboutSectionProps> = () => {
             {/* Credits */}
             <div className="pt-4 border-t border-border-subtle">
                 <div>
-                    <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-3">Core Technology</h4>
+                    <h4 className="text-xs font-bold text-text-tertiary uppercase tracking-wider mb-3">核心技术</h4>
                     <div className="flex flex-wrap gap-2">
                         {['Groq', 'Gemini', 'OpenAI', 'Deepgram', 'ElevenLabs', 'Electron', 'React', 'Rust', 'Sharp', 'TypeScript', 'Tailwind CSS', 'Vite', 'Google Cloud', 'SQLite'].map(tech => (
                             <span key={tech} className="px-2.5 py-1 rounded-md bg-bg-input border border-border-subtle text-[11px] font-medium text-text-secondary">

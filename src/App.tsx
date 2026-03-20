@@ -145,7 +145,7 @@ const App: React.FC = () => {
 
       removeComplete = window.electronAPI.onOllamaPullComplete(() => {
         setOllamaPullStatus('complete');
-        setOllamaPullMessage('Local AI memory ready');
+        setOllamaPullMessage('本地 AI 记忆已就绪');
         setOllamaPullPercent(100);
         setTimeout(() => setOllamaPullStatus('idle'), 3000);
       });
@@ -366,9 +366,9 @@ const App: React.FC = () => {
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-[#ff3333] shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="text-[#E0E0E0] font-medium text-sm">Provider Changed</h3>
+                  <h3 className="text-[#E0E0E0] font-medium text-sm">提供商已切换</h3>
                   <p className="text-[#A0A0A0] text-xs mt-1 leading-relaxed">
-                    ⚠ {incompatibleWarning.count} meetings used your previous AI provider ({incompatibleWarning.oldProvider}) and won't appear in search results under {incompatibleWarning.newProvider}.
+                    有 {incompatibleWarning.count} 场会议使用了你之前的 AI 提供商（{incompatibleWarning.oldProvider}），在当前的 {incompatibleWarning.newProvider} 检索结果中暂时不会显示。
                   </p>
                 </div>
               </div>
@@ -377,13 +377,13 @@ const App: React.FC = () => {
                   onClick={() => setIncompatibleWarning(null)}
                   className="px-3 py-1.5 rounded-lg text-xs font-medium text-[#A0A0A0] hover:text-white hover:bg-white/5 transition-colors"
                 >
-                  Dismiss
+                  知道了
                 </button>
                 <button 
                   onClick={handleReindex}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#ff3333]/10 text-[#ff3333] hover:bg-[#ff3333]/20 transition-colors"
                 >
-                  Re-index automatically
+                  自动重新索引
                 </button>
               </div>
             </div>

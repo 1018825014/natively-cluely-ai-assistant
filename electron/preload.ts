@@ -694,6 +694,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   saveCustomProvider: (provider: any) => ipcRenderer.invoke('save-custom-provider', provider),
   getCustomProviders: () => ipcRenderer.invoke('get-custom-providers'),
   deleteCustomProvider: (id: string) => ipcRenderer.invoke('delete-custom-provider', id),
+  testCustomProviderConnection: (provider: any) => ipcRenderer.invoke('test-custom-provider-connection', provider),
 
   // Follow-up Email
   generateFollowupEmail: (input: any) => ipcRenderer.invoke('generate-followup-email', input),

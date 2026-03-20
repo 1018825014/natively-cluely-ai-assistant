@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface SuggestionOverlayProps {
     className?: string;
@@ -16,10 +16,6 @@ interface GeneratedSuggestion {
     confidence: number;
 }
 
-/**
- * Natively-style suggestion overlay component
- * Displays real-time transcripts and AI-generated suggestions
- */
 export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className }) => {
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -28,10 +24,8 @@ export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className 
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // Subscribe to native audio events
         const cleanups: (() => void)[] = [];
 
-        // Connection status
         cleanups.push(
             window.electronAPI.onNativeAudioConnected(() => {
                 setIsConnected(true);
@@ -46,18 +40,15 @@ export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className 
             })
         );
 
-        // Real-time transcripts
         cleanups.push(
             window.electronAPI.onNativeAudioTranscript((transcript) => {
                 setCurrentTranscript(transcript);
-                // Clear after a delay if it's a final transcript
                 if (transcript.final) {
                     setTimeout(() => setCurrentTranscript(null), 3000);
                 }
             })
         );
 
-        // Processing status
         cleanups.push(
             window.electronAPI.onSuggestionProcessingStart(() => {
                 setIsProcessing(true);
@@ -65,7 +56,6 @@ export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className 
             })
         );
 
-        // Generated suggestions
         cleanups.push(
             window.electronAPI.onSuggestionGenerated((data) => {
                 setSuggestion(data);
@@ -73,7 +63,6 @@ export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className 
             })
         );
 
-        // Errors
         cleanups.push(
             window.electronAPI.onSuggestionError((err) => {
                 setError(err.error);
@@ -82,76 +71,69 @@ export const SuggestionOverlay: React.FC<SuggestionOverlayProps> = ({ className 
         );
 
         return () => {
-            cleanups.forEach(cleanup => cleanup());
+            cleanups.forEach((cleanup) => cleanup());
         };
     }, []);
 
-    // Don't render if not connected
     if (!isConnected && !suggestion && !currentTranscript) {
         return null;
     }
 
     return (
         <div className={`suggestion-overlay ${className || ''}`}>
-            {/* Connection indicator */}
             <div className="flex items-center gap-2 mb-2">
                 <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="text-xs text-gray-400">
-                    {isConnected ? 'Live' : 'Disconnected'}
+                    {isConnected ? '在线' : '已断开'}
                 </span>
             </div>
 
-            {/* Current transcript (interviewer's speech) */}
             {currentTranscript && (
                 <div className="transcript-bubble mb-3 p-3 rounded-lg bg-gray-800/80 backdrop-blur-sm border border-gray-700">
                     <div className="flex items-center gap-2 mb-1">
                         <span className="text-xs font-medium text-blue-400">
-                            {currentTranscript.speaker === 'interviewer' ? '🎤 Interviewer' : '👤 You'}
+                            {currentTranscript.speaker === 'interviewer' ? '🎤 面试官' : '👤 你'}
                         </span>
                         {!currentTranscript.final && (
-                            <span className="text-xs text-gray-500 animate-pulse">listening...</span>
+                            <span className="text-xs text-gray-500 animate-pulse">正在听取...</span>
                         )}
                     </div>
                     <p className="text-sm text-gray-200">{currentTranscript.text}</p>
                 </div>
             )}
 
-            {/* Processing indicator */}
             {isProcessing && (
                 <div className="processing-indicator flex items-center gap-2 p-3 rounded-lg bg-purple-900/30 border border-purple-700">
                     <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-sm text-purple-300">Generating suggestion...</span>
+                    <span className="text-sm text-purple-300">正在生成建议...</span>
                 </div>
             )}
 
-            {/* AI Suggestion */}
             {suggestion && !isProcessing && (
                 <div className="suggestion-card p-4 rounded-lg bg-gradient-to-br from-indigo-900/80 to-purple-900/80 backdrop-blur-sm border border-indigo-500/50 shadow-lg shadow-indigo-500/20">
                     <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-indigo-300">💡 Suggested Response</span>
+                        <span className="text-xs font-medium text-indigo-300">建议回复</span>
                         <span className="text-xs text-gray-400">
-                            {Math.round(suggestion.confidence * 100)}% confidence
+                            {Math.round(suggestion.confidence * 100)}% 置信度
                         </span>
                     </div>
                     <p className="text-sm text-gray-100 leading-relaxed">{suggestion.suggestion}</p>
                     <div className="mt-2 pt-2 border-t border-indigo-700/50">
                         <p className="text-xs text-gray-400 italic">
-                            Re: "{suggestion.question.substring(0, 50)}..."
+                            针对：“{suggestion.question.substring(0, 50)}...”
                         </p>
                     </div>
                 </div>
             )}
 
-            {/* Error state */}
             {error && (
                 <div className="error-card p-3 rounded-lg bg-red-900/30 border border-red-700">
-                    <span className="text-sm text-red-300">⚠️ {error}</span>
+                    <span className="text-sm text-red-300">提示：{error}</span>
                 </div>
             )}
 
-            {/* Instructions */}
             <div className="mt-3 text-xs text-gray-500 text-center">
-                <p>Say "rephrase that" or "make it shorter" for follow-ups</p>
+                <p>想继续润色时，可以说“换个说法”或“再短一点”。</p>
             </div>
         </div>
     );

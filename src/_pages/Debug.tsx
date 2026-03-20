@@ -105,13 +105,13 @@ const CodeComparisonSection = ({
   return (
     <div className="space-y-1.5">
       <h2 className="text-[13px] font-medium text-white tracking-wide">
-        Code Comparison
+        代码对比
       </h2>
       {isLoading ? (
         <div className="space-y-1">
           <div className="mt-3 flex">
             <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
-              Loading code comparison...
+              正在加载代码对比...
             </p>
           </div>
         </div>
@@ -121,7 +121,7 @@ const CodeComparisonSection = ({
           <div className="w-1/2 border-r border-gray-700">
             <div className="bg-[#2d333b] px-3 py-1.5">
               <h3 className="text-[11px] font-medium text-gray-200">
-                Previous Version
+                旧版本
               </h3>
             </div>
             <div className="p-3 overflow-x-auto">
@@ -158,7 +158,7 @@ const CodeComparisonSection = ({
           <div className="w-1/2">
             <div className="bg-[#2d333b] px-3 py-1.5">
               <h3 className="text-[11px] font-medium text-gray-200">
-                New Version
+                新版本
               </h3>
             </div>
             <div className="p-3 overflow-x-auto">
@@ -299,8 +299,8 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
       }),
       window.electronAPI.onDebugError((error: string) => {
         showToast(
-          "Processing Failed",
-          "There was an error debugging your code.",
+          "处理失败",
+          "调试代码时发生了错误。",
           "error"
         )
         setIsProcessing(false)
@@ -377,7 +377,7 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
           <div className="px-4 py-3 space-y-4">
             {/* Thoughts Section */}
             <ContentSection
-              title="What I Changed"
+              title="我改了哪些内容"
               content={
                 thoughtsData && (
                   <div className="space-y-3">

@@ -68,7 +68,7 @@ function searchMeetings(meetings: Meeting[], query: string): SearchResult[] {
                 id: meeting.id,
                 type: 'meeting',
                 title: meeting.title,
-                subtitle: new Date(meeting.date).toLocaleDateString('en-US', {
+                subtitle: new Date(meeting.date).toLocaleDateString('zh-CN', {
                     month: 'short',
                     day: 'numeric'
                 }),
@@ -298,7 +298,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
                                         focus:outline-none
                                         ${state === 'idle' ? 'cursor-default' : 'cursor-text'}
                                     `}
-                                        placeholder="Search or ask anything..."
+                                        placeholder="搜索或随时提问..."
                                     />
                                 </div>
 
@@ -369,7 +369,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
                                                                 <Search size={12} className="text-text-secondary" />
                                                             </div>
                                                             <span className="text-[13px] text-text-secondary">
-                                                                Search for <span className="text-text-primary">"{query}"</span>
+                                                                搜索 <span className="text-text-primary">"{query}"</span>
                                                             </span>
                                                         </motion.button>
                                                     </div>
@@ -378,7 +378,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
                                                     {sessionResults.length > 0 && (
                                                         <div className="px-3 py-1 mt-1">
                                                             <div className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider mb-1">
-                                                                Sessions
+                                                                会话
                                                             </div>
 
                                                             <AnimatePresence initial={false} mode="popLayout">
