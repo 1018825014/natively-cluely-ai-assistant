@@ -45,6 +45,7 @@ interface Message {
     id: string;
     role: 'user' | 'system' | 'interviewer';
     text: string;
+    timestamp?: number;
     isStreaming?: boolean;
     hasScreenshot?: boolean;
     screenshotPreview?: string;
@@ -52,18 +53,244 @@ interface Message {
     intent?: string;
 }
 
+interface InterviewerDraft {
+    id: string;
+    text: string;
+    startedAt: number;
+    updatedAt: number;
+    lastStableText: string;
+    isFinalCandidate: boolean;
+}
+
 interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
+
+type ResizeCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type OverlayWindowState = {
+    visible: boolean;
+    mode: 'launcher' | 'overlay';
+    overlayVisible: boolean;
+    launcherVisible: boolean;
+    overlayAlwaysOnTop: boolean;
+    overlayFocused: boolean;
+};
+
+const OVERLAY_PANEL_SIZE_STORAGE_KEY = 'natively_overlay_panel_size';
+const DEFAULT_PANEL_SIZE = { width: 1080, height: 760 };
+const MIN_PANEL_SIZE = { width: 860, height: 600 };
+const MAX_PANEL_SIZE = { width: 1480, height: 960 };
+
+const createMessageId = (prefix: string) => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `${prefix}-${crypto.randomUUID()}`;
+    }
+
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const TERMINAL_PUNCTUATION_REGEX = /[。！？!?…~～;；:：]$/;
+const CJK_REGEX = /[\u3400-\u9fff]/;
+const SHORT_INTERVIEWER_FRAGMENT_LENGTH = 12;
+const MAX_MERGED_INTERVIEWER_LENGTH = 80;
+
+const joinInterviewerFragments = (currentText: string, incomingText: string) => {
+    const previous = currentText.trim();
+    const next = incomingText.trim();
+
+    if (!previous) return next;
+    if (!next) return previous;
+
+    const shouldUseSpace =
+        !CJK_REGEX.test(previous) &&
+        !CJK_REGEX.test(next) &&
+        !previous.endsWith(' ') &&
+        !next.startsWith(' ');
+
+    return `${previous}${shouldUseSpace ? ' ' : ''}${next}`;
+};
+
+const shouldAppendInterviewerFragment = (currentText: string, incomingText: string) => {
+    const previous = currentText.trim();
+    const next = incomingText.trim();
+
+    if (!previous || !next) return false;
+    if (TERMINAL_PUNCTUATION_REGEX.test(previous)) return false;
+
+    const combinedLength = joinInterviewerFragments(previous, next).length;
+    if (combinedLength > MAX_MERGED_INTERVIEWER_LENGTH) return false;
+
+    return (
+        previous.length <= SHORT_INTERVIEWER_FRAGMENT_LENGTH ||
+        next.length <= SHORT_INTERVIEWER_FRAGMENT_LENGTH
+    );
+};
+
+const SAFE_TERMINAL_PUNCTUATION_REGEX = /[\u3002\uFF01\uFF1F\uFF1B\uFF1A.!?;:]$/;
+const INTERVIEWER_PAUSE_COMMIT_MS = 1500;
+const HARD_MAX_INTERVIEWER_CHARS = 220;
+const COMMITTED_REFINEMENT_WINDOW_MS = 15000;
+const SIMILARITY_REFINEMENT_MIN_CHARS = 16;
+const SIMILARITY_REFINEMENT_THRESHOLD = 0.72;
+const LCS_REFINEMENT_THRESHOLD = 0.78;
+const INTERVIEWER_REVISION_GRACE_MS = 2500;
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+
+const normalizeTranscriptForComparison = (text: string) => (
+    text
+        .trim()
+        .replace(/\s+/g, '')
+        .replace(/[\u3002\uFF01\uFF1F\uFF1B\uFF1A\uFF0C,.!?;:]/g, '')
+);
+
+const computeEditDistance = (left: string, right: string) => {
+    const rows = left.length + 1;
+    const cols = right.length + 1;
+    const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+    for (let row = 0; row < rows; row += 1) matrix[row][0] = row;
+    for (let col = 0; col < cols; col += 1) matrix[0][col] = col;
+
+    for (let row = 1; row < rows; row += 1) {
+        for (let col = 1; col < cols; col += 1) {
+            const substitutionCost = left[row - 1] === right[col - 1] ? 0 : 1;
+            matrix[row][col] = Math.min(
+                matrix[row - 1][col] + 1,
+                matrix[row][col - 1] + 1,
+                matrix[row - 1][col - 1] + substitutionCost
+            );
+        }
+    }
+
+    return matrix[left.length][right.length];
+};
+
+const calculateTranscriptSimilarity = (currentText: string, incomingText: string) => {
+    const previous = normalizeTranscriptForComparison(currentText);
+    const next = normalizeTranscriptForComparison(incomingText);
+
+    if (!previous || !next) return 0;
+    if (previous === next) return 1;
+
+    const maxLength = Math.max(previous.length, next.length);
+    if (!maxLength) return 0;
+
+    return 1 - (computeEditDistance(previous, next) / maxLength);
+};
+
+const computeLongestCommonSubsequenceLength = (left: string, right: string) => {
+    const rows = left.length + 1;
+    const cols = right.length + 1;
+    const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+    for (let row = 1; row < rows; row += 1) {
+        for (let col = 1; col < cols; col += 1) {
+            if (left[row - 1] === right[col - 1]) {
+                matrix[row][col] = matrix[row - 1][col - 1] + 1;
+            } else {
+                matrix[row][col] = Math.max(matrix[row - 1][col], matrix[row][col - 1]);
+            }
+        }
+    }
+
+    return matrix[left.length][right.length];
+};
+
+const calculateTranscriptOverlap = (currentText: string, incomingText: string) => {
+    const previous = normalizeTranscriptForComparison(currentText);
+    const next = normalizeTranscriptForComparison(incomingText);
+
+    if (!previous || !next) return 0;
+
+    const sharedLength = computeLongestCommonSubsequenceLength(previous, next);
+    return sharedLength / Math.min(previous.length, next.length);
+};
+
+const isTranscriptRefinement = (currentText: string, incomingText: string) => {
+    const previous = normalizeTranscriptForComparison(currentText);
+    const next = normalizeTranscriptForComparison(incomingText);
+
+    if (!previous || !next) return false;
+    if (previous === next) return true;
+    if (next.startsWith(previous) || previous.startsWith(next)) return true;
+
+    if (Math.min(previous.length, next.length) < SIMILARITY_REFINEMENT_MIN_CHARS) {
+        return false;
+    }
+
+    return (
+        calculateTranscriptSimilarity(previous, next) >= SIMILARITY_REFINEMENT_THRESHOLD ||
+        calculateTranscriptOverlap(previous, next) >= LCS_REFINEMENT_THRESHOLD
+    );
+};
+
+const chooseMoreCompleteTranscript = (currentText: string, incomingText: string) => {
+    const previous = currentText.trim();
+    const next = incomingText.trim();
+    const previousNormalized = normalizeTranscriptForComparison(previous);
+    const nextNormalized = normalizeTranscriptForComparison(next);
+
+    if (nextNormalized.length > previousNormalized.length) return next;
+    if (nextNormalized === previousNormalized && next.length >= previous.length) return next;
+
+    return previous;
+};
+
+const shouldReplaceCommittedInterviewerMessage = (
+    message: Message | undefined,
+    nextText: string,
+    nextTimestamp: number
+) => {
+    if (!message || message.role !== 'interviewer' || !message.timestamp) {
+        return false;
+    }
+
+    if (Math.abs(nextTimestamp - message.timestamp) > COMMITTED_REFINEMENT_WINDOW_MS) {
+        return false;
+    }
+
+    return isTranscriptRefinement(message.text, nextText);
+};
+
+const findLastCommittedInterviewerMessage = (messages: Message[]) => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === 'interviewer') {
+            return messages[index];
+        }
+    }
+
+    return undefined;
+};
+
+const shouldTreatAsInterviewerRevision = (currentText: string, incomingText: string, timeDeltaMs: number) => {
+    if (timeDeltaMs > INTERVIEWER_REVISION_GRACE_MS) {
+        return false;
+    }
+
+    return (
+        calculateTranscriptOverlap(currentText, incomingText) >= 0.45 ||
+        calculateTranscriptSimilarity(currentText, incomingText) >= 0.5
+    );
+};
+
+const isScrollNearBottom = (element: HTMLDivElement | null) => {
+    if (!element) return true;
+
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    return remaining <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+};
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
     const [messages, setMessages] = useState<Message[]>([]);
+    const [interviewerDraft, setInterviewerDraft] = useState<InterviewerDraft | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [showConversationScrollToBottom, setShowConversationScrollToBottom] = useState(false);
+    const [showRecommendationScrollToBottom, setShowRecommendationScrollToBottom] = useState(false);
     const [conversationContext, setConversationContext] = useState<string>('');
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
@@ -73,9 +300,219 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         const stored = localStorage.getItem('natively_interviewer_transcript');
         return stored !== 'false';
     });
+    const [panelSize, setPanelSize] = useState(() => {
+        const stored = localStorage.getItem(OVERLAY_PANEL_SIZE_STORAGE_KEY);
+        if (!stored) {
+            return DEFAULT_PANEL_SIZE;
+        }
+
+        try {
+            const parsed = JSON.parse(stored);
+            return {
+                width: typeof parsed.width === 'number' ? parsed.width : DEFAULT_PANEL_SIZE.width,
+                height: typeof parsed.height === 'number' ? parsed.height : DEFAULT_PANEL_SIZE.height
+            };
+        } catch {
+            return DEFAULT_PANEL_SIZE;
+        }
+    });
 
     // Analytics State
     const requestStartTimeRef = useRef<number | null>(null);
+    const messagesRef = useRef<Message[]>([]);
+    const interviewerDraftRef = useRef<InterviewerDraft | null>(null);
+    const interviewerPauseCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const clearInterviewerPauseCommitTimer = () => {
+        if (interviewerPauseCommitTimerRef.current) {
+            clearTimeout(interviewerPauseCommitTimerRef.current);
+            interviewerPauseCommitTimerRef.current = null;
+        }
+    };
+
+    const setInterviewerDraftState = (draft: InterviewerDraft | null) => {
+        interviewerDraftRef.current = draft;
+        setInterviewerDraft(draft);
+    };
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
+    const commitInterviewerDraft = (clearLivePreview: boolean = false) => {
+        clearInterviewerPauseCommitTimer();
+
+        const draft = interviewerDraftRef.current;
+        if (!draft) {
+            return;
+        }
+
+        const committedText = (draft.lastStableText || draft.text).trim();
+        if (!committedText) {
+            setInterviewerDraftState(null);
+            return;
+        }
+
+        setMessages(prev => {
+            const lastMessage = findLastCommittedInterviewerMessage(prev);
+
+            if (
+                lastMessage?.role === 'interviewer' &&
+                normalizeTranscriptForComparison(lastMessage.text) === normalizeTranscriptForComparison(committedText)
+            ) {
+                messagesRef.current = prev;
+                return prev;
+            }
+
+            if (shouldReplaceCommittedInterviewerMessage(lastMessage, committedText, draft.updatedAt)) {
+                const updated = prev.map(message => (
+                    message.id === lastMessage!.id
+                        ? {
+                            ...message,
+                            text: chooseMoreCompleteTranscript(lastMessage!.text, committedText),
+                            timestamp: draft.updatedAt,
+                        }
+                        : message
+                ));
+                messagesRef.current = updated;
+                return updated;
+            }
+
+            const nextMessages: Message[] = [...prev, {
+                id: draft.id,
+                role: 'interviewer' as const,
+                text: committedText,
+                timestamp: draft.updatedAt,
+            }];
+            messagesRef.current = nextMessages;
+            return nextMessages;
+        });
+
+        setInterviewerDraftState(null);
+        if (clearLivePreview) {
+            setRollingTranscript('');
+        }
+        setIsInterviewerSpeaking(false);
+    };
+
+    const scheduleInterviewerDraftCommit = () => {
+        clearInterviewerPauseCommitTimer();
+
+        interviewerPauseCommitTimerRef.current = setTimeout(() => {
+            const currentDraft = interviewerDraftRef.current;
+            if (!currentDraft) {
+                return;
+            }
+
+            if (Date.now() - currentDraft.updatedAt >= INTERVIEWER_PAUSE_COMMIT_MS) {
+                commitInterviewerDraft(true);
+            }
+        }, INTERVIEWER_PAUSE_COMMIT_MS);
+    };
+
+    const handleIncomingInterviewerTranscript = (transcript: {
+        text: string;
+        final: boolean;
+        timestamp: number;
+    }) => {
+        const nextText = transcript.text.trim();
+        if (!nextText) {
+            return;
+        }
+
+        const currentDraft = interviewerDraftRef.current;
+        let nextDraft: InterviewerDraft;
+
+        if (!currentDraft) {
+            const lastCommittedMessage = findLastCommittedInterviewerMessage(messagesRef.current);
+            if (shouldReplaceCommittedInterviewerMessage(lastCommittedMessage, nextText, transcript.timestamp)) {
+                const refinedText = chooseMoreCompleteTranscript(lastCommittedMessage!.text, nextText);
+
+                setMessages(prev => {
+                    const nextMessages = prev.filter(message => message.id !== lastCommittedMessage!.id);
+                    if (nextMessages.length === prev.length) {
+                        messagesRef.current = prev;
+                        return prev;
+                    }
+                    messagesRef.current = nextMessages;
+                    return nextMessages;
+                });
+
+                nextDraft = {
+                    id: lastCommittedMessage!.id,
+                    text: refinedText,
+                    startedAt: lastCommittedMessage!.timestamp ?? transcript.timestamp,
+                    updatedAt: transcript.timestamp,
+                    lastStableText: refinedText,
+                    isFinalCandidate: transcript.final,
+                };
+            } else {
+                nextDraft = {
+                    id: createMessageId('interviewer'),
+                    text: nextText,
+                    startedAt: transcript.timestamp,
+                    updatedAt: transcript.timestamp,
+                    lastStableText: transcript.final ? nextText : '',
+                    isFinalCandidate: transcript.final,
+                };
+            }
+        } else if (isTranscriptRefinement(currentDraft.text, nextText)) {
+            const refinedText = chooseMoreCompleteTranscript(currentDraft.text, nextText);
+            nextDraft = {
+                ...currentDraft,
+                text: refinedText,
+                updatedAt: transcript.timestamp,
+                lastStableText: transcript.final ? refinedText : currentDraft.lastStableText,
+                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
+            };
+        } else if (shouldAppendInterviewerFragment(currentDraft.text, nextText)) {
+            const appendedText = joinInterviewerFragments(currentDraft.text, nextText);
+            nextDraft = {
+                ...currentDraft,
+                text: appendedText,
+                updatedAt: transcript.timestamp,
+                lastStableText: transcript.final ? appendedText : currentDraft.lastStableText,
+                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
+            };
+        } else if (shouldTreatAsInterviewerRevision(currentDraft.text, nextText, Math.abs(transcript.timestamp - currentDraft.updatedAt))) {
+            const revisedText = transcript.final
+                ? nextText
+                : (
+                    normalizeTranscriptForComparison(nextText).length >= normalizeTranscriptForComparison(currentDraft.text).length
+                        ? nextText
+                        : currentDraft.text
+                );
+
+            nextDraft = {
+                ...currentDraft,
+                text: revisedText,
+                updatedAt: transcript.timestamp,
+                lastStableText: transcript.final ? revisedText : currentDraft.lastStableText,
+                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
+            };
+        } else {
+            commitInterviewerDraft(false);
+            nextDraft = {
+                id: createMessageId('interviewer'),
+                text: nextText,
+                startedAt: transcript.timestamp,
+                updatedAt: transcript.timestamp,
+                lastStableText: transcript.final ? nextText : '',
+                isFinalCandidate: transcript.final,
+            };
+        }
+
+        setInterviewerDraftState(nextDraft);
+
+        const shouldCommitImmediately = nextDraft.text.length >= HARD_MAX_INTERVIEWER_CHARS;
+
+        if (shouldCommitImmediately) {
+            commitInterviewerDraft(false);
+            return;
+        }
+
+        scheduleInterviewerDraftCommit();
+    };
 
     // Sync transcript setting
     useEffect(() => {
@@ -87,6 +524,133 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => window.removeEventListener('storage', handleStorage);
     }, []);
 
+    useEffect(() => () => clearInterviewerPauseCommitTimer(), []);
+
+    const clampPanelSize = (width: number, height: number) => {
+        const maxWidth = Math.min(MAX_PANEL_SIZE.width, Math.floor((window.screen?.availWidth || MAX_PANEL_SIZE.width) * 0.9));
+        const maxHeight = Math.min(MAX_PANEL_SIZE.height, Math.floor((window.screen?.availHeight || MAX_PANEL_SIZE.height) * 0.9));
+
+        return {
+            width: Math.round(Math.min(Math.max(width, MIN_PANEL_SIZE.width), maxWidth)),
+            height: Math.round(Math.min(Math.max(height, MIN_PANEL_SIZE.height), maxHeight))
+        };
+    };
+
+    const updatePanelSize = (nextWidth: number, nextHeight: number) => {
+        const nextSize = clampPanelSize(nextWidth, nextHeight);
+        panelSizeRef.current = nextSize;
+        setPanelSize(nextSize);
+        return nextSize;
+    };
+
+    const scrollConversationToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        const element = conversationScrollRef.current;
+        if (!element) return;
+
+        element.scrollTo({ top: element.scrollHeight, behavior });
+        isConversationPinnedToBottomRef.current = true;
+        setShowConversationScrollToBottom(false);
+    };
+
+    const scrollRecommendationToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        const element = recommendationScrollRef.current;
+        if (!element) return;
+
+        element.scrollTo({ top: element.scrollHeight, behavior });
+        isRecommendationPinnedToBottomRef.current = true;
+        setShowRecommendationScrollToBottom(false);
+    };
+
+    const handleConversationScroll = () => {
+        const pinnedToBottom = isScrollNearBottom(conversationScrollRef.current);
+        isConversationPinnedToBottomRef.current = pinnedToBottom;
+        setShowConversationScrollToBottom(!pinnedToBottom);
+    };
+
+    const handleRecommendationScroll = () => {
+        const pinnedToBottom = isScrollNearBottom(recommendationScrollRef.current);
+        isRecommendationPinnedToBottomRef.current = pinnedToBottom;
+        setShowRecommendationScrollToBottom(!pinnedToBottom);
+    };
+
+    const stopResizing = () => {
+        window.removeEventListener('pointermove', handleResizeMove);
+        window.removeEventListener('pointerup', stopResizing);
+        resizeStateRef.current = null;
+    };
+
+    function handleResizeMove(event: PointerEvent) {
+        const resizeState = resizeStateRef.current;
+        if (!resizeState) {
+            return;
+        }
+
+        const deltaX = event.clientX - resizeState.startX;
+        const deltaY = event.clientY - resizeState.startY;
+
+        let nextWidth = resizeState.startWidth;
+        let nextHeight = resizeState.startHeight;
+        let nextX = resizeState.startWindowX;
+        let nextY = resizeState.startWindowY;
+
+        if (resizeState.corner.includes('right')) {
+            nextWidth = resizeState.startWidth + deltaX;
+        }
+        if (resizeState.corner.includes('left')) {
+            nextWidth = resizeState.startWidth - deltaX;
+        }
+        if (resizeState.corner.includes('bottom')) {
+            nextHeight = resizeState.startHeight + deltaY;
+        }
+        if (resizeState.corner.includes('top')) {
+            nextHeight = resizeState.startHeight - deltaY;
+        }
+
+        const clampedSize = updatePanelSize(nextWidth, nextHeight);
+
+        if (resizeState.corner.includes('left')) {
+            nextX = resizeState.startWindowX + (resizeState.startWidth - clampedSize.width);
+        }
+        if (resizeState.corner.includes('top')) {
+            nextY = resizeState.startWindowY + (resizeState.startHeight - clampedSize.height);
+        }
+
+        const maxX = Math.max(0, (window.screen?.availWidth || clampedSize.width) - clampedSize.width);
+        const maxY = Math.max(0, (window.screen?.availHeight || clampedSize.height) - clampedSize.height);
+
+        void window.electronAPI?.setOverlayBounds?.({
+            x: Math.round(Math.min(Math.max(nextX, 0), maxX)),
+            y: Math.round(Math.min(Math.max(nextY, 0), maxY)),
+            width: clampedSize.width,
+            height: clampedSize.height
+        });
+    }
+
+    const handleResizeStart = (corner: ResizeCorner) => (event: React.PointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        resizeStateRef.current = {
+            corner,
+            startX: event.clientX,
+            startY: event.clientY,
+            startWindowX: window.screenX,
+            startWindowY: window.screenY,
+            startWidth: panelSizeRef.current.width,
+            startHeight: panelSizeRef.current.height
+        };
+
+        window.addEventListener('pointermove', handleResizeMove);
+        window.addEventListener('pointerup', stopResizing);
+    };
+
+    useEffect(() => {
+        panelSizeRef.current = panelSize;
+        localStorage.setItem(OVERLAY_PANEL_SIZE_STORAGE_KEY, JSON.stringify(panelSize));
+    }, [panelSize]);
+
+    useEffect(() => () => stopResizing(), []);
+
     const [rollingTranscript, setRollingTranscript] = useState('');  // For interviewer rolling text bar
     const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);  // Track if actively speaking
     const [voiceInput, setVoiceInput] = useState('');  // Accumulated user voice input
@@ -94,8 +658,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const interviewerMessagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const conversationScrollRef = useRef<HTMLDivElement>(null);
+    const recommendationScrollRef = useRef<HTMLDivElement>(null);
+    const isConversationPinnedToBottomRef = useRef(true);
+    const isRecommendationPinnedToBottomRef = useRef(true);
+    const resizeStateRef = useRef<{
+        corner: ResizeCorner;
+        startX: number;
+        startY: number;
+        startWindowX: number;
+        startWindowY: number;
+        startWidth: number;
+        startHeight: number;
+    } | null>(null);
+    const panelSizeRef = useRef(panelSize);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -215,16 +794,29 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    // Auto-scroll
+    // Auto-scroll only when the user is already pinned to the bottom of a column.
     useEffect(() => {
-        if (isExpanded) {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (!isExpanded) {
+            return;
         }
-    }, [messages, isExpanded, isProcessing]);
+
+        if (isConversationPinnedToBottomRef.current) {
+            requestAnimationFrame(() => scrollConversationToBottom('smooth'));
+        } else {
+            setShowConversationScrollToBottom(true);
+        }
+
+        if (isRecommendationPinnedToBottomRef.current) {
+            requestAnimationFrame(() => scrollRecommendationToBottom('smooth'));
+        } else {
+            setShowRecommendationScrollToBottom(true);
+        }
+    }, [messages, interviewerDraft, isExpanded, isProcessing, isManualRecording, voiceInput, manualTranscript]);
 
     // Build conversation context from messages
     useEffect(() => {
         const context = messages
+            .filter(m => !m.isStreaming)
             .filter(m => m.role !== 'user' || !m.hasScreenshot)
             .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
             .slice(-20)
@@ -253,13 +845,42 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         }
     }, [isExpanded]);
 
-    // Keyboard shortcut to toggle expanded state (via Main Process)
+    // Legacy renderer toggle event
     useEffect(() => {
         if (!window.electronAPI?.onToggleExpand) return;
         const unsubscribe = window.electronAPI.onToggleExpand(() => {
             setIsExpanded(prev => !prev);
         });
         return () => unsubscribe();
+    }, []);
+
+    // Keep renderer expansion state in sync with the actual overlay window visibility.
+    useEffect(() => {
+        if (!window.electronAPI?.getOverlayWindowState || !window.electronAPI?.onWindowVisibilityChanged) return;
+
+        let mounted = true;
+        const applyOverlayVisibility = (state: OverlayWindowState) => {
+            if (!mounted || !state) return;
+
+            if (state.mode === 'overlay' || !state.visible) {
+                setIsExpanded(state.visible);
+            }
+        };
+
+        window.electronAPI.getOverlayWindowState()
+            .then((state) => applyOverlayVisibility(state as OverlayWindowState))
+            .catch((error) => {
+                console.error('[NativelyInterface] Failed to fetch overlay window state:', error);
+            });
+
+        const unsubscribe = window.electronAPI.onWindowVisibilityChanged((state) => {
+            applyOverlayVisibility(state as OverlayWindowState);
+        });
+
+        return () => {
+            mounted = false;
+            unsubscribe();
+        };
     }, []);
 
     // Session Reset Listener - Clears UI when a NEW meeting starts
@@ -272,7 +893,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setAttachedContext([]);
             setManualTranscript('');
             setVoiceInput('');
+            setRollingTranscript('');
+            setIsInterviewerSpeaking(false);
             setIsProcessing(false);
+            clearInterviewerPauseCommitTimer();
+            setInterviewerDraftState(null);
             // Optionally reset connection status if needed, but connection persists
 
             // Track new conversation/session if applicable?
@@ -343,29 +968,27 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 return;  // Safety check for any other speaker types
             }
 
-            // Route to rolling transcript bar - accumulate text continuously
             setIsInterviewerSpeaking(!transcript.final);
+            setRollingTranscript(transcript.final ? '' : transcript.text);
+            handleIncomingInterviewerTranscript({
+                text: transcript.text,
+                final: transcript.final,
+                timestamp: transcript.timestamp || Date.now(),
+            });
 
             if (transcript.final) {
-                // Append finalized text to accumulated transcript
-                setRollingTranscript(prev => {
-                    const separator = prev ? '  ·  ' : '';
-                    return prev + separator + transcript.text;
-                });
-
-                // Clear speaking indicator after pause
                 setTimeout(() => {
                     setIsInterviewerSpeaking(false);
-                }, 3000);
-            } else {
-                // For partial transcripts, show current segment appended to accumulated
-                setRollingTranscript(prev => {
-                    // Find where previous finalized content ends (look for last separator)
-                    const lastSeparator = prev.lastIndexOf('  ·  ');
-                    const accumulated = lastSeparator >= 0 ? prev.substring(0, lastSeparator + 5) : '';
-                    return accumulated + transcript.text;
-                });
+                }, 1800);
             }
+        }));
+
+        cleanups.push(window.electronAPI.onNativeAudioSpeechEnded((event) => {
+            if (event.speaker !== 'interviewer') {
+                return;
+            }
+
+            commitInterviewerDraft(true);
         }));
 
         // AI Suggestions from native audio (legacy)
@@ -1050,17 +1673,28 @@ Provide only the answer, nothing else.`;
 
     const clearChat = () => {
         setMessages([]);
+        setRollingTranscript('');
+        setIsInterviewerSpeaking(false);
     };
+
+    const compactMarkdownText = (text: string) => (
+        text
+            .replace(/\r\n/g, '\n')
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim()
+    );
 
 
 
 
     const renderMessageText = (msg: Message) => {
+        const normalizedText = compactMarkdownText(msg.text);
         // Code-containing messages get special styling
         // We split by code blocks to keep the "Code Solution" UI intact for the code parts
         // But use ReactMarkdown for the text parts around it
-        if (msg.isCode || (msg.role === 'system' && msg.text.includes('```'))) {
-            const parts = msg.text.split(/(```[\s\S]*?```)/g);
+        if (msg.isCode || (msg.role === 'system' && normalizedText.includes('```'))) {
+            const parts = normalizedText.split(/(```[\s\S]*?```)/g);
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
                     <div className="flex items-center gap-2 mb-2 text-purple-300 font-semibold text-xs uppercase tracking-wide">
@@ -1147,12 +1781,12 @@ Provide only the answer, nothing else.`;
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-cyan-100" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
                         }}>
-                            {msg.text}
+                            {normalizedText}
                         </ReactMarkdown>
                     </div>
                 </div>
@@ -1168,12 +1802,12 @@ Provide only the answer, nothing else.`;
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-indigo-100" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
                         }}>
-                            {msg.text}
+                            {normalizedText}
                         </ReactMarkdown>
                     </div>
                 </div>
@@ -1189,12 +1823,12 @@ Provide only the answer, nothing else.`;
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-[#FFF9C4]" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
                         }}>
-                            {msg.text}
+                            {normalizedText}
                         </ReactMarkdown>
                     </div>
                 </div>
@@ -1203,7 +1837,7 @@ Provide only the answer, nothing else.`;
 
         if (msg.intent === 'what_to_answer') {
             // Split text by code blocks (Handle unclosed blocks at EOF)
-            const parts = msg.text.split(/(```[\s\S]*?(?:```|$))/g);
+            const parts = normalizedText.split(/(```[\s\S]*?(?:```|$))/g);
 
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
@@ -1268,15 +1902,15 @@ Provide only the answer, nothing else.`;
                                         remarkPlugins={[remarkGfm, remarkMath]}
                                         rehypePlugins={[rehypeKatex]}
                                         components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                                            strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
                                             em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
-                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
-                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
+                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
+                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-1.5 space-y-0.5" {...props} />,
                                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
                                         }}
                                     >
-                                        {part}
+                                        {compactMarkdownText(part)}
                                     </ReactMarkdown>
                                 </div>
                             );
@@ -1294,17 +1928,17 @@ Provide only the answer, nothing else.`;
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
-                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                        strong: ({ node, ...props }: any) => <strong className="font-bold opacity-100" {...props} />,
+                        p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0 whitespace-pre-wrap" {...props} />,
+                        strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
                         em: ({ node, ...props }: any) => <em className="italic opacity-90" {...props} />,
-                        ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
-                        ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
+                        ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
+                        ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-1.5 space-y-0.5" {...props} />,
                         li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
                         code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
                         a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
                     }}
                 >
-                    {msg.text}
+                    {normalizedText}
                 </ReactMarkdown>
             </div>
         );
@@ -1354,10 +1988,10 @@ Provide only the answer, nothing else.`;
                 handleAnswerNow();
             } else if (isShortcutPressed(e, 'scrollUp')) {
                 e.preventDefault();
-                scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
+                conversationScrollRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
             } else if (isShortcutPressed(e, 'scrollDown')) {
                 e.preventDefault();
-                scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+                conversationScrollRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
             } else if (isShortcutPressed(e, 'moveWindowUp') || isShortcutPressed(e, 'moveWindowDown')) {
                 // Prevent default scrolling when moving window
                 e.preventDefault();
@@ -1375,11 +2009,8 @@ Provide only the answer, nothing else.`;
     // Actually, KeybindManager registers global shortcuts. If they are registered as global, 
     // Electron might consume them before they reach here?
     // 'toggle-app' is Global.
-    // 'toggle-visibility' is NOT Global in default config (isGlobal: false), so it depends on focus.
-    // So we MUST listen for them here.
 
     const generalHandlersRef = useRef({
-        toggleVisibility: () => window.electronAPI.toggleWindow(),
         processScreenshots: handleWhatToSay,
         resetCancel: async () => {
             if (isProcessing) {
@@ -1415,7 +2046,6 @@ Provide only the answer, nothing else.`;
 
     // Update ref
     generalHandlersRef.current = {
-        toggleVisibility: () => window.electronAPI.toggleWindow(),
         processScreenshots: handleWhatToSay,
         resetCancel: async () => {
             if (isProcessing) {
@@ -1455,11 +2085,7 @@ Provide only the answer, nothing else.`;
             const target = e.target as HTMLElement;
             const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-            if (isShortcutPressed(e, 'toggleVisibility')) {
-                // Always allow toggling visibility
-                e.preventDefault();
-                handlers.toggleVisibility();
-            } else if (isShortcutPressed(e, 'processScreenshots')) {
+            if (isShortcutPressed(e, 'processScreenshots')) {
                 if (!isInput) {
                     e.preventDefault();
                     handlers.processScreenshots();
@@ -1480,6 +2106,509 @@ Provide only the answer, nothing else.`;
         window.addEventListener('keydown', handleGeneralKeyDown);
         return () => window.removeEventListener('keydown', handleGeneralKeyDown);
     }, [isShortcutPressed]);
+
+    const conversationMessages = messages.filter((msg) => msg.role === 'interviewer' || msg.role === 'user');
+    const displayedConversationMessages = interviewerDraft
+        ? [...conversationMessages, {
+            id: interviewerDraft.id,
+            role: 'interviewer' as const,
+            text: interviewerDraft.text,
+            timestamp: interviewerDraft.updatedAt,
+            isStreaming: true
+        }]
+        : conversationMessages;
+    const recommendationMessages = messages.filter((msg) => msg.role === 'system');
+    const hasOverlayContent = displayedConversationMessages.length > 0 || recommendationMessages.length > 0 || isManualRecording || isProcessing;
+    const liveUserTranscript = [voiceInput, manualTranscript].filter(Boolean).join(voiceInput && manualTranscript ? ' ' : '');
+
+    const renderConversationBubble = (msg: Message) => {
+        const isUserMessage = msg.role === 'user';
+
+        return (
+            <div key={msg.id} className={`flex ${isUserMessage ? 'justify-end' : 'justify-start'}`}>
+                <div
+                    className={[
+                        'group relative max-w-[92%] rounded-[22px] border px-4 py-3 text-[13px] leading-6 shadow-[0_10px_35px_rgba(0,0,0,0.16)]',
+                        isUserMessage
+                            ? 'border-blue-400/25 bg-blue-500/12 text-blue-50 rounded-tr-[6px]'
+                            : 'border-white/[0.08] bg-white/[0.04] text-slate-100 rounded-tl-[6px]'
+                    ].join(' ')}
+                >
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        <span>{isUserMessage ? 'You' : 'Interviewer'}</span>
+                        {msg.isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                        {msg.hasScreenshot && <Image className="h-3 w-3 text-slate-400/80" />}
+                    </div>
+                    {msg.hasScreenshot && msg.screenshotPreview && (
+                        <img
+                            src={msg.screenshotPreview}
+                            alt="Attached screenshot"
+                            className="mb-3 max-h-24 rounded-xl border border-white/10 object-cover"
+                        />
+                    )}
+                    {renderMessageText(msg)}
+                </div>
+            </div>
+        );
+    };
+
+    const getRecommendationMeta = (msg: Message) => {
+        if (msg.text.startsWith('Error:') || msg.text.startsWith('❌')) {
+            return {
+                title: 'Error',
+                accent: 'text-rose-300',
+                icon: <X className="h-3.5 w-3.5" />
+            };
+        }
+
+        switch (msg.intent) {
+            case 'what_to_answer':
+                return {
+                    title: msg.isStreaming ? 'Drafting answer' : 'Suggested answer',
+                    accent: 'text-emerald-300',
+                    icon: <Pencil className="h-3.5 w-3.5" />
+                };
+            case 'shorten':
+                return {
+                    title: 'Shortened version',
+                    accent: 'text-cyan-300',
+                    icon: <MessageSquare className="h-3.5 w-3.5" />
+                };
+            case 'recap':
+                return {
+                    title: 'Recap',
+                    accent: 'text-indigo-300',
+                    icon: <RefreshCw className="h-3.5 w-3.5" />
+                };
+            case 'follow_up_questions':
+                return {
+                    title: 'Follow-up questions',
+                    accent: 'text-amber-300',
+                    icon: <HelpCircle className="h-3.5 w-3.5" />
+                };
+            default:
+                return {
+                    title: msg.isStreaming ? 'Generating' : 'Recommendation',
+                    accent: 'text-emerald-300',
+                    icon: <Sparkles className="h-3.5 w-3.5" />
+                };
+        }
+    };
+
+    const renderRecommendationContent = (msg: Message) => (
+        <div className="markdown-content text-[13px] leading-6 text-slate-100">
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                    p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                    strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
+                    em: ({ node, ...props }: any) => <em className="italic text-emerald-100/85" {...props} />,
+                    ul: ({ node, ...props }: any) => <ul className="mb-1.5 ml-4 list-disc space-y-0.5" {...props} />,
+                    ol: ({ node, ...props }: any) => <ol className="mb-1.5 ml-4 list-decimal space-y-0.5" {...props} />,
+                    li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                    blockquote: ({ node, ...props }: any) => <blockquote className="my-2 border-l-2 border-emerald-400/30 pl-3 text-slate-300/90" {...props} />,
+                    pre: ({ node, ...props }: any) => <div className="my-2 overflow-hidden rounded-xl border border-white/[0.08] bg-zinc-800/60" {...props} />,
+                    code: ({ inline, className, children, ...props }: any) => {
+                        const languageMatch = /language-(\w+)/.exec(className || '');
+                        const code = String(children).replace(/\n$/, '');
+
+                        if (!inline) {
+                            return (
+                                <SyntaxHighlighter
+                                    language={languageMatch?.[1] || 'text'}
+                                    style={vscDarkPlus}
+                                    customStyle={{
+                                        margin: 0,
+                                        borderRadius: 0,
+                                        fontSize: '12px',
+                                        lineHeight: '1.55',
+                                        background: 'transparent',
+                                        padding: '14px',
+                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+                                    }}
+                                    wrapLongLines={true}
+                                >
+                                    {code}
+                                </SyntaxHighlighter>
+                            );
+                        }
+
+                        return (
+                            <code className="rounded bg-black/25 px-1 py-0.5 text-xs font-mono text-emerald-100" {...props}>
+                                {children}
+                            </code>
+                        );
+                    },
+                    a: ({ node, ...props }: any) => <a className="underline underline-offset-2 hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                }}
+            >
+                {compactMarkdownText(msg.text)}
+            </ReactMarkdown>
+        </div>
+    );
+
+    const renderRecommendationBubble = (msg: Message) => {
+        const meta = getRecommendationMeta(msg);
+
+        return (
+            <div key={msg.id} className="group relative rounded-[22px] border border-white/[0.08] bg-white/[0.04] px-4 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.16)]">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className={`flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${meta.accent}`}>
+                        {meta.icon}
+                        <span>{meta.title}</span>
+                    </div>
+                    {!msg.isStreaming && (
+                        <button
+                            onClick={() => handleCopy(msg.text)}
+                            className="rounded-md bg-black/35 p-1.5 text-slate-400 opacity-0 transition-opacity hover:bg-black/60 hover:text-white group-hover:opacity-100"
+                        >
+                            <Copy className="h-3.5 w-3.5" />
+                        </button>
+                    )}
+                </div>
+                {renderRecommendationContent(msg)}
+            </div>
+        );
+    };
+
+    return (
+        <div
+            ref={contentRef}
+            style={{ width: panelSize.width, height: panelSize.height }}
+            className="mx-auto flex min-h-0 flex-col items-center gap-2 bg-transparent font-sans text-slate-200"
+        >
+            <AnimatePresence>
+                {isExpanded && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                        transition={{ duration: 0.3, ease: 'easeInOut' }}
+                        className="flex h-full w-full flex-col items-center gap-2"
+                    >
+                        <TopPill
+                            expanded={isExpanded}
+                            onToggle={() => setIsExpanded(!isExpanded)}
+                            onQuit={() => onEndMeeting ? onEndMeeting() : window.electronAPI.quitApp()}
+                        />
+
+                        <div className="draggable-area relative flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#1E1E1E]/95 shadow-2xl shadow-black/40 backdrop-blur-2xl">
+                            {(rollingTranscript || isInterviewerSpeaking) && showTranscript && (
+                                <RollingTranscript
+                                    text={rollingTranscript}
+                                    isActive={isInterviewerSpeaking}
+                                />
+                            )}
+
+                            <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4">
+                                {hasOverlayContent ? (
+                                    <div className="flex h-full min-h-0 gap-4">
+                                        <section className="relative flex h-full min-h-0 min-w-0 flex-[1.15] flex-col overflow-hidden rounded-[22px] border border-white/[0.08] bg-black/15">
+                                            <div className="border-b border-white/[0.08] px-4 py-3">
+                                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                                                    <MessageSquare className="h-3.5 w-3.5" />
+                                                    <span>Conversation</span>
+                                                </div>
+                                                <p className="mt-1 text-xs text-slate-500">Interviewer and your replies stay together here.</p>
+                                            </div>
+
+                                            <div
+                                                ref={conversationScrollRef}
+                                                onScroll={handleConversationScroll}
+                                                className="min-h-0 flex-1 overflow-y-auto px-4 py-4 no-drag"
+                                                style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}
+                                            >
+                                                <div className="space-y-3">
+                                                    {displayedConversationMessages.length === 0 && !isManualRecording ? (
+                                                        <div className="rounded-[18px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-6 text-slate-500">
+                                                            The conversation transcript will appear here as soon as the interviewer or your microphone produces text.
+                                                        </div>
+                                                    ) : (
+                                                        displayedConversationMessages.map(renderConversationBubble)
+                                                    )}
+
+                                                    {isManualRecording && (
+                                                        <div className="flex justify-end">
+                                                            <div className="max-w-[92%] rounded-[22px] rounded-tr-[6px] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-[13px] leading-6 text-emerald-100 shadow-[0_10px_35px_rgba(0,0,0,0.16)]">
+                                                                <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+                                                                    <Mic className="h-3.5 w-3.5" />
+                                                                    <span>Voice input</span>
+                                                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                                </div>
+                                                                {liveUserTranscript ? (
+                                                                    <div className="whitespace-pre-wrap">{liveUserTranscript}</div>
+                                                                ) : (
+                                                                    <div className="flex items-center gap-1.5 py-1 text-emerald-300/75">
+                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                                                        <span className="ml-1 text-[11px] uppercase tracking-[0.18em]">Listening</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    <div ref={interviewerMessagesEndRef} />
+                                                </div>
+                                            </div>
+
+                                            {showConversationScrollToBottom && (
+                                                <button
+                                                    onClick={() => scrollConversationToBottom('smooth')}
+                                                    className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-lg shadow-black/30 transition-all hover:border-white/20 hover:bg-black/80 hover:text-white"
+                                                >
+                                                    <ChevronDown className="h-3.5 w-3.5" />
+                                                    <span>Latest</span>
+                                                </button>
+                                            )}
+                                        </section>
+
+                                        <section className="relative flex h-full min-h-0 min-w-[360px] flex-[0.95] flex-col overflow-hidden rounded-[22px] border border-white/[0.08] bg-black/15">
+                                            <div className="border-b border-white/[0.08] px-4 py-3">
+                                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300/90">
+                                                    <Sparkles className="h-3.5 w-3.5" />
+                                                    <span>LLM recommendation</span>
+                                                </div>
+                                                <p className="mt-1 text-xs text-slate-500">Recommended answers stay compact on the right.</p>
+                                            </div>
+
+                                            <div
+                                                ref={recommendationScrollRef}
+                                                onScroll={handleRecommendationScroll}
+                                                className="min-h-0 flex-1 overflow-y-auto px-4 py-4 no-drag"
+                                                style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}
+                                            >
+                                                <div className="space-y-3">
+                                                    {recommendationMessages.length === 0 && !isProcessing ? (
+                                                        <div className="rounded-[18px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-6 text-slate-500">
+                                                            Click "How to answer" and recommendations will show up here.
+                                                        </div>
+                                                    ) : (
+                                                        recommendationMessages.map(renderRecommendationBubble)
+                                                    )}
+
+                                                    {isProcessing && recommendationMessages.length === 0 && (
+                                                        <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] px-4 py-4">
+                                                            <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+                                                                <Sparkles className="h-3.5 w-3.5" />
+                                                                <span>Generating</span>
+                                                            </div>
+                                                            <div className="flex gap-1.5">
+                                                                <div className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                                <div className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                                <div className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    <div ref={messagesEndRef} />
+                                                </div>
+                                            </div>
+
+                                            {showRecommendationScrollToBottom && (
+                                                <button
+                                                    onClick={() => scrollRecommendationToBottom('smooth')}
+                                                    className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-lg shadow-black/30 transition-all hover:border-white/20 hover:bg-black/80 hover:text-white"
+                                                >
+                                                    <ChevronDown className="h-3.5 w-3.5" />
+                                                    <span>Latest</span>
+                                                </button>
+                                            )}
+                                        </section>
+                                    </div>
+                                ) : (
+                                    <div className="flex h-full items-center justify-center px-6 py-8">
+                                        <div className="max-w-xl rounded-[22px] border border-dashed border-white/10 bg-white/[0.02] px-6 py-8 text-center text-sm leading-6 text-slate-500">
+                                            Start the interview and let the system audio or your microphone produce text. The conversation will stay on the left, and the recommended answer will stay on the right.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className={`flex flex-nowrap items-center justify-center gap-1.5 overflow-x-hidden px-4 pb-3 ${rollingTranscript && showTranscript ? 'pt-1' : 'pt-3'}`}>
+                                <button onClick={handleWhatToSay} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                    <Pencil className="mr-1.5 inline h-3 w-3 opacity-70" /> How to answer
+                                </button>
+                                <button onClick={() => handleFollowUp('shorten')} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                    <MessageSquare className="mr-1.5 inline h-3 w-3 opacity-70" /> Shorten
+                                </button>
+                                <button onClick={handleRecap} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                    <RefreshCw className="mr-1.5 inline h-3 w-3 opacity-70" /> Recap
+                                </button>
+                                <button onClick={handleFollowUpQuestions} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                    <HelpCircle className="mr-1.5 inline h-3 w-3 opacity-70" /> Follow-up
+                                </button>
+                                <button
+                                    onClick={handleAnswerNow}
+                                    className={`interaction-base interaction-press min-w-[88px] shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 active:scale-95 ${isManualRecording
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'
+                                        : 'bg-white/5 text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-400'
+                                        }`}
+                                >
+                                    {isManualRecording ? (
+                                        <>
+                                            <div className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />
+                                            Stop
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Zap className="mr-1.5 inline h-3 w-3 opacity-70" />
+                                            Answer
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+
+                            <div className="p-3 pt-0">
+                                {attachedContext.length > 0 && (
+                                    <div className="no-drag mb-2 rounded-lg border border-white/10 bg-white/5 p-2 transition-all duration-200">
+                                        <div className="mb-1.5 flex items-center justify-between">
+                                            <span className="text-[11px] font-medium text-white">
+                                                Attached screenshots: {attachedContext.length}
+                                            </span>
+                                            <button
+                                                onClick={() => setAttachedContext([])}
+                                                className="rounded-full p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+                                            >
+                                                <X className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                        <div className="flex max-w-full gap-1.5 overflow-x-auto pb-1">
+                                            {attachedContext.map((ctx, idx) => (
+                                                <div key={ctx.path} className="group/thumb relative flex-shrink-0">
+                                                    <img
+                                                        src={ctx.preview}
+                                                        alt={`Screenshot ${idx + 1}`}
+                                                        className="h-10 w-auto rounded border border-white/20"
+                                                    />
+                                                    <button
+                                                        onClick={() => setAttachedContext(prev => prev.filter((_, i) => i !== idx))}
+                                                        className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500/80 opacity-0 transition-opacity hover:bg-red-500 group-hover/thumb:opacity-100"
+                                                        title="Remove"
+                                                    >
+                                                        <X className="h-2.5 w-2.5 text-white" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <span className="text-[10px] text-slate-400">Ask a question or click Answer to include the screenshot context.</span>
+                                    </div>
+                                )}
+
+                                <div className="group relative">
+                                    <input
+                                        ref={textInputRef}
+                                        type="text"
+                                        value={inputValue}
+                                        onChange={(e) => setInputValue(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
+                                        placeholder="Ask about the screen or current conversation..."
+                                        className="w-full rounded-xl border border-white/5 bg-[#1E1E1E] py-2.5 pl-3 pr-10 text-[13px] leading-relaxed text-slate-200 transition-all duration-200 ease-sculpted placeholder:text-slate-500 hover:bg-[#252525] focus:border-white/10 focus:bg-[#1E1E1E] focus:outline-none focus:ring-1 focus:ring-white/10"
+                                    />
+
+                                    {!inputValue && (
+                                        <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 opacity-20">
+                                            <span className="text-[10px]">→</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 flex items-center justify-between px-0.5">
+                                    <div className="flex items-center gap-1.5">
+                                        <button
+                                            onClick={(e) => {
+                                                if (!contentRef.current) return;
+                                                const contentRect = contentRef.current.getBoundingClientRect();
+                                                const buttonRect = e.currentTarget.getBoundingClientRect();
+                                                const GAP = 8;
+
+                                                const x = window.screenX + buttonRect.left;
+                                                const y = window.screenY + contentRect.bottom + GAP;
+
+                                                window.electronAPI.toggleModelSelector({ x, y });
+                                            }}
+                                            className="interaction-base interaction-press flex w-[156px] items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/5 hover:text-white"
+                                        >
+                                            <span className="min-w-0 flex-1 truncate">
+                                                {(() => {
+                                                    const m = currentModel;
+                                                    if (m.startsWith('ollama-')) return m.replace('ollama-', '');
+                                                    if (m === 'gemini-3.1-flash-lite-preview') return 'Gemini 3.1 Flash';
+                                                    if (m === 'gemini-3.1-pro-preview') return 'Gemini 3.1 Pro';
+                                                    if (m === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
+                                                    if (m === 'gpt-5.4') return 'GPT 5.4';
+                                                    if (m === 'claude-sonnet-4-6') return 'Sonnet 4.6';
+                                                    return m;
+                                                })()}
+                                            </span>
+                                            <ChevronDown size={14} className="shrink-0 transition-transform" />
+                                        </button>
+
+                                        <div className="mx-1 h-3 w-px bg-white/10" />
+
+                                        <div className="relative">
+                                            <button
+                                                onClick={(e) => {
+                                                    if (isSettingsOpen) {
+                                                        window.electronAPI.toggleSettingsWindow();
+                                                        return;
+                                                    }
+
+                                                    if (!contentRef.current) return;
+
+                                                    const contentRect = contentRef.current.getBoundingClientRect();
+                                                    const buttonRect = e.currentTarget.getBoundingClientRect();
+                                                    const GAP = 8;
+                                                    const x = window.screenX + buttonRect.left;
+                                                    const y = window.screenY + contentRect.bottom + GAP;
+
+                                                    window.electronAPI.toggleSettingsWindow({ x, y });
+                                                }}
+                                                className={`interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-lg ${isSettingsOpen ? 'bg-white/10 text-white' : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'}`}
+                                                title="Settings"
+                                            >
+                                                <SlidersHorizontal className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        onClick={handleManualSubmit}
+                                        disabled={!inputValue.trim()}
+                                        className={`interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full ${inputValue.trim()
+                                            ? 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
+                                            : 'cursor-not-allowed bg-white/5 text-white/10'
+                                            }`}
+                                    >
+                                        <ArrowRight className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div
+                                onPointerDown={handleResizeStart('top-left')}
+                                className="no-drag absolute left-1 top-1 h-5 w-5 cursor-nwse-resize rounded-full"
+                            />
+                            <div
+                                onPointerDown={handleResizeStart('top-right')}
+                                className="no-drag absolute right-1 top-1 h-5 w-5 cursor-nesw-resize rounded-full"
+                            />
+                            <div
+                                onPointerDown={handleResizeStart('bottom-left')}
+                                className="no-drag absolute bottom-1 left-1 h-5 w-5 cursor-nesw-resize rounded-full"
+                            />
+                            <div
+                                onPointerDown={handleResizeStart('bottom-right')}
+                                className="no-drag absolute bottom-1 right-1 h-5 w-5 cursor-nwse-resize rounded-full"
+                            />
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
 
     return (
         <div ref={contentRef} className="flex flex-col items-center w-fit mx-auto h-fit min-h-0 bg-transparent p-0 rounded-[24px] font-sans text-slate-200 gap-2">

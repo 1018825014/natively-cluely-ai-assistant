@@ -699,7 +699,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
 
     // STT Provider settings
-    const [sttProvider, setSttProvider] = useState<'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'>('google');
+    const [sttProvider, setSttProvider] = useState<'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'>('google');
     const [groqSttModel, setGroqSttModel] = useState('whisper-large-v3-turbo');
     const [sttGroqKey, setSttGroqKey] = useState('');
     const [sttOpenaiKey, setSttOpenaiKey] = useState('');
@@ -708,6 +708,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [sttAzureKey, setSttAzureKey] = useState('');
     const [sttAzureRegion, setSttAzureRegion] = useState('eastus');
     const [sttIbmKey, setSttIbmKey] = useState('');
+    const [sttAlibabaKey, setSttAlibabaKey] = useState('');
     const [sttTestStatus, setSttTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
     const [sttTestError, setSttTestError] = useState('');
     const [sttSaving, setSttSaving] = useState(false);
@@ -721,6 +722,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [hasStoredIbmWatsonKey, setHasStoredIbmWatsonKey] = useState(false);
     const [sttSonioxKey, setSttSonioxKey] = useState('');
     const [hasStoredSonioxKey, setHasStoredSonioxKey] = useState(false);
+    const [hasStoredAlibabaKey, setHasStoredAlibabaKey] = useState(false);
+    const [technicalGlossaryText, setTechnicalGlossaryText] = useState('');
+    const [alibabaWorkspaceId, setAlibabaWorkspaceId] = useState('');
+    const [alibabaVocabularyId, setAlibabaVocabularyId] = useState('');
+    const [glossarySaving, setGlossarySaving] = useState(false);
+    const [glossarySaved, setGlossarySaved] = useState(false);
+    const [sttCompareResults, setSttCompareResults] = useState<any>(null);
+    const [sttCompareBusy, setSttCompareBusy] = useState<'idle' | 'starting' | 'stopping' | 'exporting'>('idle');
+    const [sttCompareExportMessage, setSttCompareExportMessage] = useState('');
     const [isSttDropdownOpen, setIsSttDropdownOpen] = useState(false);
     const sttDropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -755,8 +765,24 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                     if (creds.azureRegion) setSttAzureRegion(creds.azureRegion);
                     setHasStoredIbmWatsonKey(creds.hasIbmWatsonKey);
                     setHasStoredSonioxKey(creds.hasSonioxKey || false);
+                    setHasStoredAlibabaKey(creds.hasAlibabaKey || false);
+                    if (creds.technicalGlossaryConfig) {
+                        const entries = Array.isArray(creds.technicalGlossaryConfig.entries)
+                            ? creds.technicalGlossaryConfig.entries
+                            : [];
+                        setTechnicalGlossaryText(entries.map((entry: any) =>
+                            typeof entry?.weight === 'number' ? `${entry.term} | ${entry.weight}` : entry.term
+                        ).join('\n'));
+                        setAlibabaWorkspaceId(creds.technicalGlossaryConfig.alibabaWorkspaceId || '');
+                        setAlibabaVocabularyId(creds.technicalGlossaryConfig.alibabaVocabularyId || '');
+                    }
                     setHasStoredGoogleSearchKey(creds.hasGoogleSearchKey || false);
                     setHasStoredGoogleSearchCseId(creds.hasGoogleSearchCseId || false);
+                }
+
+                const compareResults = await window.electronAPI?.getSttCompareResults?.();
+                if (compareResults) {
+                    setSttCompareResults(compareResults);
                 }
             } catch (e) {
                 console.error('Failed to load STT settings:', e);
@@ -765,7 +791,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         if (isOpen) loadSttSettings();
     }, [isOpen]);
 
-    const handleSttProviderChange = async (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+    useEffect(() => {
+        if (!isOpen || !window.electronAPI?.onSttCompareUpdate) return;
+
+        return window.electronAPI.onSttCompareUpdate((results) => {
+            setSttCompareResults(results);
+        });
+    }, [isOpen]);
+
+    const handleSttProviderChange = async (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => {
         setSttProvider(provider);
         setIsSttDropdownOpen(false);
         setSttTestStatus('idle');
@@ -778,7 +812,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         }
     };
 
-    const handleSttKeySubmit = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', key: string) => {
+    const handleSttKeySubmit = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', key: string) => {
         if (!key.trim()) return;
 
         // Auto-test before saving
@@ -823,6 +857,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             } else if (provider === 'soniox') {
                 // @ts-ignore
                 await window.electronAPI?.setSonioxApiKey?.(key.trim());
+            } else if (provider === 'alibaba') {
+                // @ts-ignore
+                await window.electronAPI?.setAlibabaSttApiKey?.(key.trim());
             } else {
                 // @ts-ignore
                 await window.electronAPI?.setDeepgramApiKey?.(key.trim());
@@ -833,6 +870,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             else if (provider === 'azure') setHasStoredAzureKey(true);
             else if (provider === 'ibmwatson') setHasStoredIbmWatsonKey(true);
             else if (provider === 'soniox') setHasStoredSonioxKey(true);
+            else if (provider === 'alibaba') setHasStoredAlibabaKey(true);
             else setHasStoredDeepgramKey(true);
 
             setSttSaved(true);
@@ -846,7 +884,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         }
     };
 
-    const handleRemoveSttKey = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+    const handleRemoveSttKey = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => {
         if (!confirm(`Are you sure you want to remove the ${provider === 'ibmwatson' ? 'IBM Watson' : provider.charAt(0).toUpperCase() + provider.slice(1)} API key?`)) return;
 
         try {
@@ -880,6 +918,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 await window.electronAPI?.setSonioxApiKey?.('');
                 setSttSonioxKey('');
                 setHasStoredSonioxKey(false);
+            } else if (provider === 'alibaba') {
+                // @ts-ignore
+                await window.electronAPI?.setAlibabaSttApiKey?.('');
+                setSttAlibabaKey('');
+                setHasStoredAlibabaKey(false);
             } else {
                 // @ts-ignore
                 await window.electronAPI?.setDeepgramApiKey?.('');
@@ -914,7 +957,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         const keyMap: Record<string, string> = {
             groq: sttGroqKey, openai: sttOpenaiKey, deepgram: sttDeepgramKey,
             elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
-            soniox: sttSonioxKey,
+            soniox: sttSonioxKey, alibaba: sttAlibabaKey,
         };
         const keyToTest = keyMap[sttProvider] || '';
         if (!keyToTest.trim()) {
@@ -942,6 +985,81 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         } catch (e: any) {
             setSttTestStatus('error');
             setSttTestError(e.message || 'Test failed');
+        }
+    };
+
+    const handleSaveTechnicalGlossary = async () => {
+        setGlossarySaving(true);
+        try {
+            const entries = technicalGlossaryText
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                    const [term, weightPart] = line.split('|').map((part) => part.trim());
+                    const parsedWeight = weightPart ? Number(weightPart) : undefined;
+                    return {
+                        term,
+                        weight: Number.isFinite(parsedWeight) ? parsedWeight : undefined,
+                    };
+                });
+
+            await window.electronAPI?.setTechnicalGlossary?.({
+                entries,
+                alibabaWorkspaceId: alibabaWorkspaceId.trim() || undefined,
+                alibabaVocabularyId: alibabaVocabularyId.trim() || undefined,
+            });
+            setGlossarySaved(true);
+            setTimeout(() => setGlossarySaved(false), 2000);
+        } catch (error) {
+            console.error('Failed to save technical glossary:', error);
+        } finally {
+            setGlossarySaving(false);
+        }
+    };
+
+    const handleStartSttCompare = async () => {
+        setSttCompareBusy('starting');
+        setSttCompareExportMessage('');
+        try {
+            await window.electronAPI?.startSttCompareSession?.();
+            const results = await window.electronAPI?.getSttCompareResults?.();
+            if (results) setSttCompareResults(results);
+        } catch (error) {
+            console.error('Failed to start STT compare session:', error);
+        } finally {
+            setSttCompareBusy('idle');
+        }
+    };
+
+    const handleStopSttCompare = async () => {
+        setSttCompareBusy('stopping');
+        try {
+            await window.electronAPI?.stopSttCompareSession?.();
+            const results = await window.electronAPI?.getSttCompareResults?.();
+            if (results) setSttCompareResults(results);
+        } catch (error) {
+            console.error('Failed to stop STT compare session:', error);
+        } finally {
+            setSttCompareBusy('idle');
+        }
+    };
+
+    const handleExportSttBenchmark = async () => {
+        setSttCompareBusy('exporting');
+        setSttCompareExportMessage('');
+        try {
+            const result = await window.electronAPI?.exportSttBenchmarkReport?.();
+            if (result?.success) {
+                setSttCompareExportMessage(`JSON: ${result.jsonPath} | Markdown: ${result.markdownPath}`);
+            } else {
+                setSttCompareExportMessage(result?.error || 'Export failed');
+            }
+        } catch (error: any) {
+            console.error('Failed to export STT benchmark report:', error);
+            setSttCompareExportMessage(error?.message || 'Export failed');
+        } finally {
+            setSttCompareBusy('idle');
         }
     };
 
@@ -1361,7 +1479,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                         }}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'profile' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
                                     >
-                                        <User size={16} /> 职业画像
+                                        <User size={16} /> Project Library
                                     </button>
 
                                     <button
@@ -1761,19 +1879,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             <h3 className="text-sm font-bold text-text-primary">职业画像</h3>
                                                 <span className="bg-yellow-500/10 text-yellow-500 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">BETA</span>
                                             </div>
-                                            <button
-                                                onClick={() => setIsPremiumModalOpen(true)}
-                                                className={`text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 px-2.5 py-1 rounded-full border shadow-[0_0_10px_rgba(250,204,21,0.2)] hover:shadow-[0_0_15px_rgba(250,204,21,0.3)] ${isPremium
-                                                    ? 'bg-zinc-800 text-white border-white/10 hover:bg-zinc-700'
-                                                    : 'bg-[#FACC15] text-black border-transparent hover:bg-[#FDE047] active:scale-[0.98]'
-                                                    }`}
-                                            >
-                                                {isPremium ? <CheckCircle size={12} className="text-green-400" /> : <Sparkles size={12} className="text-black/80" />}
-                                                {isPremium ? 'Manage Pro' : 'Unlock Pro'}
-                                            </button>
+                                            <div className="text-[11px] font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-500">
+                                                <CheckCircle size={12} />
+                                                Project Context
+                                            </div>
                                         </div>
                                         <p className="text-xs text-text-secondary mb-2">
-                                            This engine constructs an intelligent representation of your career history.
+                                            Build a project-scoped knowledge library for interview deep dives.
                                         </p>
                                     </div>
 
@@ -1795,7 +1907,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 {profileData?.identity?.name || 'Identity Node Inactive'}
                                                             </h4>
                                                             <p className="text-xs text-text-secondary mt-0.5 tracking-wide">
-                                                                {profileData?.identity?.email || 'Upload a resume to begin mapping.'}
+                                                                {profileData?.identity?.email || 'Upload a resume to create your project library.'}
                                                             </p>
                                                         </div>
                                                     </div>
@@ -1818,11 +1930,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         )}
 
                                                         {/* High-fidelity Toggle */}
-                                                        <div className={`flex items-center gap-2 bg-bg-input px-3 py-1.5 rounded-full border border-border-subtle ${!isPremium ? 'opacity-40 cursor-not-allowed' : ''}`} title={!isPremium ? 'Requires Pro license' : ''}>
+                                                        <div className="flex items-center gap-2 bg-bg-input px-3 py-1.5 rounded-full border border-border-subtle">
                                             <span className="text-xs font-medium text-text-secondary">画像引擎</span>
                                                             <div
                                                                 onClick={async () => {
-                                                                    if (!profileStatus.hasProfile || !isPremium) return;
+                                                                    if (!profileStatus.hasProfile) return;
                                                                     const newState = !profileStatus.profileMode;
                                                                     try {
                                                                         await window.electronAPI?.profileSetMode?.(newState);
@@ -1831,9 +1943,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                         console.error('Failed to toggle profile mode:', e);
                                                                     }
                                                                 }}
-                                                                className={`w-9 h-5 rounded-full relative transition-colors ${(!profileStatus.hasProfile || !isPremium) ? 'opacity-40 cursor-not-allowed bg-bg-toggle-switch' : profileStatus.profileMode ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+                                                                className={`w-9 h-5 rounded-full relative transition-colors ${!profileStatus.hasProfile ? 'opacity-40 cursor-not-allowed bg-bg-toggle-switch' : profileStatus.profileMode ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
                                                             >
-                                                                <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform ${profileStatus.profileMode && isPremium ? 'translate-x-4' : 'translate-x-0'}`} />
+                                                                <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform ${profileStatus.profileMode ? 'translate-x-4' : 'translate-x-0'}`} />
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1911,7 +2023,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             </div>
                                                         ) : (
                                                             <p className="text-xs text-text-secondary truncate pr-4">
-                                                                Provide a resume file to seed the intelligence engine.
+                                                                Upload a resume to seed 2 to 3 interview projects.
                                                             </p>
                                                         )}
                                                     </div>
@@ -1989,7 +2101,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             </div>
                                                         ) : (
                                                             <p className="text-xs text-text-secondary">
-                                                                Upload a JD to enable persona tuning and company research.
+                                                            Upload a JD as an optional ranking and wording bias. Facts still come from your project library.
                                                             </p>
                                                         )}
                                                     </div>
@@ -2048,7 +2160,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                         </div>
                                     </div>
 
-                                    {/* Google Search API Card */}
+                                    {false && (
                                     <div className="mt-5">
                                         <div className="bg-bg-item-surface rounded-xl border border-border-subtle">
                                             <div className="p-5">
@@ -2150,8 +2262,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                         </div>
                                     </div>
 
+                                    )}
+
                                     {/* Company Research Section */}
-                                    {profileData?.hasActiveJD && profileData?.activeJD?.company && (
+                                    {false && profileData?.hasActiveJD && profileData?.activeJD?.company && (
                                         <div className="mt-5">
                                             <div className="bg-bg-item-surface rounded-xl border border-border-subtle p-5">
                                                 <div className="flex items-center justify-between mb-4">
@@ -2413,6 +2527,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             { id: 'azure', label: 'Azure Speech', badge: hasStoredAzureKey ? '已保存' : null, desc: 'Microsoft Cognitive Services 语音转文字', color: 'cyan', icon: <Mic size={14} /> },
                                                             { id: 'ibmwatson', label: 'IBM Watson', badge: hasStoredIbmWatsonKey ? '已保存' : null, desc: 'IBM Watson 云端 STT 服务', color: 'indigo', icon: <Mic size={14} /> },
                                                             { id: 'soniox', label: 'Soniox', badge: hasStoredSonioxKey ? '已保存' : null, recommended: true, desc: '支持 60+ 语言、多语种与领域上下文', color: 'cyan', icon: <Mic size={14} /> },
+                                                            { id: 'alibaba', label: 'Alibaba Paraformer', badge: hasStoredAlibabaKey ? 'Saved' : null, recommended: true, desc: 'DashScope realtime Chinese ASR with hotwords', color: 'orange', icon: <Mic size={14} /> },
                                                         ]}
                                                     />
                                                 </div>
@@ -2485,7 +2600,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             {sttProvider !== 'google' && (
                                                 <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
                                                     <label className="text-xs font-medium text-text-secondary block">
-                                                        {sttProvider === 'groq' ? 'Groq' : sttProvider === 'openai' ? 'OpenAI STT' : sttProvider === 'elevenlabs' ? 'ElevenLabs' : sttProvider === 'azure' ? 'Azure' : sttProvider === 'ibmwatson' ? 'IBM Watson' : sttProvider === 'soniox' ? 'Soniox' : 'Deepgram'} API Key
+                                                        {sttProvider === 'groq' ? 'Groq' : sttProvider === 'openai' ? 'OpenAI STT' : sttProvider === 'elevenlabs' ? 'ElevenLabs' : sttProvider === 'azure' ? 'Azure' : sttProvider === 'ibmwatson' ? 'IBM Watson' : sttProvider === 'soniox' ? 'Soniox' : sttProvider === 'alibaba' ? 'Alibaba Paraformer' : 'Deepgram'} API Key
                                                     </label>
                                                     {sttProvider === 'openai' && (
                                                         <p className="text-[10px] text-text-tertiary mb-1.5">
@@ -2502,6 +2617,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                             : sttProvider === 'azure' ? sttAzureKey
                                                                                 : sttProvider === 'ibmwatson' ? sttIbmKey
                                                                                     : sttProvider === 'soniox' ? sttSonioxKey
+                                                                                        : sttProvider === 'alibaba' ? sttAlibabaKey
                                                                                         : sttDeepgramKey
                                                             }
                                                             onChange={(e) => {
@@ -2511,6 +2627,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 else if (sttProvider === 'azure') setSttAzureKey(e.target.value);
                                                                 else if (sttProvider === 'ibmwatson') setSttIbmKey(e.target.value);
                                                                 else if (sttProvider === 'soniox') setSttSonioxKey(e.target.value);
+                                                                else if (sttProvider === 'alibaba') setSttAlibabaKey(e.target.value);
                                                                 else setSttDeepgramKey(e.target.value);
                                                             }}
                                                             placeholder={
@@ -2535,6 +2652,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 const keyMap: Record<string, string> = {
                                                                     groq: sttGroqKey, openai: sttOpenaiKey, deepgram: sttDeepgramKey,
                                                                     elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
+                                                                    soniox: sttSonioxKey, alibaba: sttAlibabaKey,
                                                                 };
                                                                 handleSttKeySubmit(sttProvider as any, keyMap[sttProvider] || '');
                                                             }}
@@ -2542,7 +2660,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 const keyMap: Record<string, string> = {
                                                                     groq: sttGroqKey, openai: sttOpenaiKey, deepgram: sttDeepgramKey,
                                                                     elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
-                                                                    soniox: sttSonioxKey,
+                                                                    soniox: sttSonioxKey, alibaba: sttAlibabaKey,
                                                                 };
                                                                 return (keyMap[sttProvider] || '').trim();
                                                             })()}
@@ -2562,6 +2680,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 azure: hasStoredAzureKey,
                                                                 ibmwatson: hasStoredIbmWatsonKey,
                                                                 soniox: hasStoredSonioxKey,
+                                                                alibaba: hasStoredAlibabaKey,
                                                             };
                                                             return hasKeyMap[sttProvider] ? (
                                                                 <button
@@ -2584,6 +2703,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             azure: hasStoredAzureKey,
                                                             ibmwatson: hasStoredIbmWatsonKey,
                                                             soniox: hasStoredSonioxKey,
+                                                            alibaba: hasStoredAlibabaKey,
                                                         };
                                                         const keyMap: Record<string, string> = {
                                                             groq: sttGroqKey,
@@ -2593,6 +2713,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             azure: sttAzureKey,
                                                             ibmwatson: sttIbmKey,
                                                             soniox: sttSonioxKey,
+                                                            alibaba: sttAlibabaKey,
                                                         };
                                                         const hasStoredKey = hasKeyMap[sttProvider];
                                                         const currentInput = keyMap[sttProvider] || '';
@@ -2657,7 +2778,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     deepgram: 'https://console.deepgram.com',
                                                                     elevenlabs: 'https://elevenlabs.io/app/settings/api-keys',
                                                                     azure: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeech',
-                                                                    ibmwatson: 'https://cloud.ibm.com/catalog/services/speech-to-text'
+                                                                    ibmwatson: 'https://cloud.ibm.com/catalog/services/speech-to-text',
+                                                                    alibaba: 'https://bailian.console.aliyun.com/'
                                                                 };
                                                                 if (urls[sttProvider]) {
                                                                     // @ts-ignore
@@ -2675,6 +2797,150 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
                                                 </div>
                                             )}
+
+                                            <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-text-primary">Technical Glossary</h4>
+                                                        <p className="text-xs text-text-secondary mt-1">
+                                                            One term per line. Optional format: <code>term | weight</code>.
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        onClick={handleSaveTechnicalGlossary}
+                                                        disabled={glossarySaving}
+                                                        className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${glossarySaved ? 'bg-green-500/20 text-green-400' : 'bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary'}`}
+                                                    >
+                                                        {glossarySaving ? 'Saving...' : glossarySaved ? 'Saved' : 'Save Glossary'}
+                                                    </button>
+                                                </div>
+
+                                                <textarea
+                                                    value={technicalGlossaryText}
+                                                    onChange={(e) => setTechnicalGlossaryText(e.target.value)}
+                                                    rows={8}
+                                                    className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors font-mono"
+                                                    placeholder={'agent | 5\ntool calling | 5\nMCP | 5\nRAG | 5\nJava | 5\n线程池 | 5'}
+                                                />
+
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <div className="space-y-1.5">
+                                                        <label className="text-xs font-medium text-text-secondary block">Alibaba Workspace ID</label>
+                                                        <input
+                                                            type="text"
+                                                            value={alibabaWorkspaceId}
+                                                            onChange={(e) => setAlibabaWorkspaceId(e.target.value)}
+                                                            placeholder="Optional workspace id"
+                                                            className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1.5">
+                                                        <label className="text-xs font-medium text-text-secondary block">Alibaba Vocabulary ID</label>
+                                                        <input
+                                                            type="text"
+                                                            value={alibabaVocabularyId}
+                                                            onChange={(e) => setAlibabaVocabularyId(e.target.value)}
+                                                            placeholder="Optional vocabulary_id"
+                                                            className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-[11px] text-text-tertiary">
+                                                    OpenAI realtime transcription uses the glossary as a prompt. Alibaba Paraformer will use the optional <code>vocabulary_id</code> when provided.
+                                                </p>
+                                            </div>
+
+                                            <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-4">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <h4 className="text-sm font-semibold text-text-primary">STT Compare</h4>
+                                                        <p className="text-xs text-text-secondary mt-1">
+                                                            Shadow-run the current provider alongside OpenAI and Alibaba on the same meeting audio.
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        {(sttCompareResults?.active) ? (
+                                                            <button
+                                                                onClick={handleStopSttCompare}
+                                                                disabled={sttCompareBusy !== 'idle'}
+                                                                className="px-4 py-2 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 disabled:opacity-50"
+                                                            >
+                                                                {sttCompareBusy === 'stopping' ? 'Stopping...' : 'Stop Compare'}
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                onClick={handleStartSttCompare}
+                                                                disabled={sttCompareBusy !== 'idle'}
+                                                                className="px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary disabled:opacity-50"
+                                                            >
+                                                                {sttCompareBusy === 'starting' ? 'Starting...' : 'Start Compare'}
+                                                            </button>
+                                                        )}
+                                                        <button
+                                                            onClick={handleExportSttBenchmark}
+                                                            disabled={sttCompareBusy !== 'idle' || !(sttCompareResults?.utterances?.length > 0)}
+                                                            className="px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary disabled:opacity-50"
+                                                        >
+                                                            {sttCompareBusy === 'exporting' ? 'Exporting...' : 'Export Report'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {sttCompareExportMessage && (
+                                                    <div className="text-[11px] text-text-secondary break-all">
+                                                        {sttCompareExportMessage}
+                                                    </div>
+                                                )}
+
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                    {(sttCompareResults?.providers || []).map((provider: any) => {
+                                                        const summary = sttCompareResults?.summary?.byProvider?.[provider.id];
+                                                        return (
+                                                            <div key={provider.id} className="rounded-lg border border-border-subtle bg-bg-input p-3 space-y-1.5">
+                                                                <div className="flex items-center justify-between gap-2">
+                                                                    <span className="text-sm font-medium text-text-primary">{provider.label}</span>
+                                                                    {!provider.available && <span className="text-[10px] text-amber-400">Missing key</span>}
+                                                                </div>
+                                                                <p className="text-[11px] text-text-secondary">
+                                                                    Avg first partial: {summary?.avgFirstPartialLatencyMs ?? 'n/a'} ms
+                                                                </p>
+                                                                <p className="text-[11px] text-text-secondary">
+                                                                    Avg final: {summary?.avgFinalLatencyMs ?? 'n/a'} ms
+                                                                </p>
+                                                                <p className="text-[11px] text-text-secondary">
+                                                                    Term hits: {summary?.technicalTerms?.join(', ') || 'none'}
+                                                                </p>
+                                                                {!provider.available && provider.reason && (
+                                                                    <p className="text-[11px] text-text-tertiary">{provider.reason}</p>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+
+                                                <div className="space-y-3">
+                                                    {(sttCompareResults?.utterances || []).slice(-6).reverse().map((utterance: any) => (
+                                                        <div key={utterance.id} className="rounded-lg border border-border-subtle bg-bg-input p-3 space-y-2">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">{utterance.speaker}</span>
+                                                                <span className="text-[11px] text-text-tertiary">{utterance.audioBytes} bytes</span>
+                                                            </div>
+                                                            {Object.values(utterance.providerResults || {}).map((provider: any) => (
+                                                                <div key={provider.providerId} className="text-[12px] text-text-secondary">
+                                                                    <span className="font-medium text-text-primary">{provider.label}: </span>
+                                                                    <span>{provider.finalText || provider.partialText || '(no transcript yet)'}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ))}
+                                                    {(!sttCompareResults?.utterances || sttCompareResults.utterances.length === 0) && (
+                                                        <div className="text-xs text-text-secondary">
+                                                            No compare samples yet. Start a compare session and let the app receive some microphone or system audio.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
 
                                             {/* Recognition Language Family */}
                                             <CustomSelect

@@ -17,6 +17,7 @@ import WebSocket from 'ws';
 import axios from 'axios';
 import FormData from 'form-data';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { TechnicalGlossaryConfig, buildOpenAITranscriptionPrompt, normalizeTechnicalGlossaryConfig } from '../stt/TechnicalGlossary';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
     // Public config
     private apiKey: string;
     private languageKey = 'en';
+    private technicalGlossaryConfig: TechnicalGlossaryConfig = normalizeTechnicalGlossaryConfig();
 
     // Audio config (set from pipeline)
     private inputSampleRate = 16_000;
@@ -148,6 +150,18 @@ export class OpenAIStreamingSTT extends EventEmitter {
 
     /** No-op — no credential files needed */
     public setCredentials(_path: string): void {}
+
+    public setTechnicalGlossaryConfig(config?: TechnicalGlossaryConfig | null): void {
+        const normalized = normalizeTechnicalGlossaryConfig(config);
+        const changed = JSON.stringify(normalized) !== JSON.stringify(this.technicalGlossaryConfig);
+        this.technicalGlossaryConfig = normalized;
+
+        if (changed && this.isActive && this.mode === 'ws') {
+            console.log('[OpenAIStreaming] Technical glossary updated; restarting session');
+            this._closeWs(true);
+            this._connectWs();
+        }
+    }
 
     // ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -296,7 +310,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
                     input_audio_format: 'pcm16',
                     input_audio_transcription: {
                         model,
-                        prompt: '',
+                        prompt: this.getTranscriptionPrompt(),
                         language: lang || '',
                     },
                     // Server VAD — offload voice activity detection entirely to the server
@@ -678,6 +692,8 @@ export class OpenAIStreamingSTT extends EventEmitter {
             ? (RECOGNITION_LANGUAGES[this.languageKey]?.iso639 ?? '')
             : '';
         if (lang) form.append('language', lang);
+        const prompt = this.getTranscriptionPrompt();
+        if (prompt) form.append('prompt', prompt);
 
         const response = await axios.post(REST_ENDPOINT, form, {
             headers: {
@@ -772,5 +788,9 @@ export class OpenAIStreamingSTT extends EventEmitter {
         buf.writeUInt32LE(samples.length, 40);
         samples.copy(buf, 44);
         return buf;
+    }
+
+    private getTranscriptionPrompt(): string {
+        return buildOpenAITranscriptionPrompt(this.technicalGlossaryConfig);
     }
 }

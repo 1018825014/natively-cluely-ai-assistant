@@ -33,6 +33,8 @@ export interface AssistantResponse {
 }
 
 export class SessionTracker {
+    private static readonly FINAL_REFINEMENT_WINDOW_MS = 5000;
+
     // Context management (mirrors Swift ContextManager)
     private contextItems: ContextItem[] = [];
     private readonly contextWindowDuration: number = 120; // 120 seconds
@@ -104,13 +106,49 @@ export class SessionTracker {
 
         if (!text) return null;
 
-        // Deduplicate: check if this exact item already exists
+        // Deduplicate exact repeats or provider "same sentence but longer" refinements.
         const lastItem = this.contextItems[this.contextItems.length - 1];
+        const lastTranscript = this.fullTranscript[this.fullTranscript.length - 1];
         if (lastItem &&
-            lastItem.role === role &&
-            Math.abs(lastItem.timestamp - segment.timestamp) < 500 &&
-            lastItem.text === text) {
-            return null;
+            lastItem.role === role) {
+            const timeDelta = Math.abs(lastItem.timestamp - segment.timestamp);
+
+            if (timeDelta < 500 &&
+                this.normalizeTranscriptForComparison(lastItem.text) === this.normalizeTranscriptForComparison(text)) {
+                if (text.length > lastItem.text.length) {
+                    lastItem.text = text;
+                    lastItem.timestamp = segment.timestamp;
+
+                    if (lastTranscript &&
+                        this.mapSpeakerToRole(lastTranscript.speaker) === role &&
+                        this.normalizeTranscriptForComparison(lastTranscript.text) === this.normalizeTranscriptForComparison(text)) {
+                        lastTranscript.text = text;
+                        lastTranscript.timestamp = segment.timestamp;
+                    }
+                }
+                return null;
+            }
+
+            if (timeDelta <= SessionTracker.FINAL_REFINEMENT_WINDOW_MS &&
+                this.isTranscriptRefinement(lastItem.text, text)) {
+                const refinedText = this.chooseMoreCompleteTranscript(lastItem.text, text);
+                if (refinedText === lastItem.text) {
+                    return null;
+                }
+
+                lastItem.text = refinedText;
+                lastItem.timestamp = segment.timestamp;
+
+                if (lastTranscript &&
+                    this.mapSpeakerToRole(lastTranscript.speaker) === role &&
+                    this.isTranscriptRefinement(lastTranscript.text, refinedText)) {
+                    lastTranscript.text = refinedText;
+                    lastTranscript.timestamp = segment.timestamp;
+                    lastTranscript.confidence = segment.confidence ?? lastTranscript.confidence;
+                }
+
+                return null;
+            }
         }
 
         this.contextItems.push({
@@ -373,6 +411,97 @@ export class SessionTracker {
         if (speaker === 'user') return 'user';
         if (speaker === 'assistant') return 'assistant';
         return 'interviewer'; // system audio = interviewer
+    }
+
+    private normalizeTranscriptForComparison(text: string): string {
+        return text
+            .trim()
+            .replace(/\s+/g, '')
+            .replace(/[\u3002\uFF01\uFF1F\uFF1B\uFF1A\uFF0C,.!?;:]/g, '');
+    }
+
+    private computeEditDistance(left: string, right: string): number {
+        const rows = left.length + 1;
+        const cols = right.length + 1;
+        const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+        for (let row = 0; row < rows; row += 1) matrix[row][0] = row;
+        for (let col = 0; col < cols; col += 1) matrix[0][col] = col;
+
+        for (let row = 1; row < rows; row += 1) {
+            for (let col = 1; col < cols; col += 1) {
+                const substitutionCost = left[row - 1] === right[col - 1] ? 0 : 1;
+                matrix[row][col] = Math.min(
+                    matrix[row - 1][col] + 1,
+                    matrix[row][col - 1] + 1,
+                    matrix[row - 1][col - 1] + substitutionCost
+                );
+            }
+        }
+
+        return matrix[left.length][right.length];
+    }
+
+    private computeLongestCommonSubsequenceLength(left: string, right: string): number {
+        const rows = left.length + 1;
+        const cols = right.length + 1;
+        const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+        for (let row = 1; row < rows; row += 1) {
+            for (let col = 1; col < cols; col += 1) {
+                if (left[row - 1] === right[col - 1]) {
+                    matrix[row][col] = matrix[row - 1][col - 1] + 1;
+                } else {
+                    matrix[row][col] = Math.max(matrix[row - 1][col], matrix[row][col - 1]);
+                }
+            }
+        }
+
+        return matrix[left.length][right.length];
+    }
+
+    private calculateTranscriptSimilarity(previousText: string, nextText: string): number {
+        const previous = this.normalizeTranscriptForComparison(previousText);
+        const next = this.normalizeTranscriptForComparison(nextText);
+
+        if (!previous || !next) return 0;
+        if (previous === next) return 1;
+
+        return 1 - (this.computeEditDistance(previous, next) / Math.max(previous.length, next.length));
+    }
+
+    private calculateTranscriptOverlap(previousText: string, nextText: string): number {
+        const previous = this.normalizeTranscriptForComparison(previousText);
+        const next = this.normalizeTranscriptForComparison(nextText);
+
+        if (!previous || !next) return 0;
+
+        return this.computeLongestCommonSubsequenceLength(previous, next) / Math.min(previous.length, next.length);
+    }
+
+    private isTranscriptRefinement(previousText: string, nextText: string): boolean {
+        const previous = this.normalizeTranscriptForComparison(previousText);
+        const next = this.normalizeTranscriptForComparison(nextText);
+
+        if (!previous || !next) return false;
+        if (previous === next) return true;
+        if (next.startsWith(previous) || previous.startsWith(next)) return true;
+        if (Math.min(previous.length, next.length) < 16) return false;
+
+        return this.calculateTranscriptSimilarity(previous, next) >= 0.72 ||
+            this.calculateTranscriptOverlap(previous, next) >= 0.78;
+    }
+
+    private chooseMoreCompleteTranscript(previousText: string, nextText: string): string {
+        const previous = previousText.trim();
+        const next = nextText.trim();
+        const previousNormalized = this.normalizeTranscriptForComparison(previous);
+        const nextNormalized = this.normalizeTranscriptForComparison(next);
+
+        if (nextNormalized.length > previousNormalized.length) return next;
+        if (nextNormalized === previousNormalized && next.length >= previous.length) return next;
+
+        return previous;
     }
 
     private evictOldEntries(): void {

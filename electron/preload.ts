@@ -1,11 +1,39 @@
 import { contextBridge, ipcRenderer } from "electron"
 
+type OverlayWindowState = {
+  visible: boolean
+  mode: "launcher" | "overlay"
+  overlayVisible: boolean
+  launcherVisible: boolean
+  overlayAlwaysOnTop: boolean
+  overlayFocused: boolean
+}
+
+type NativeAudioTranscript = {
+  speaker: string
+  text: string
+  final: boolean
+  timestamp: number
+  confidence: number
+}
+
+type NativeAudioSpeechEnded = {
+  speaker: "interviewer" | "user"
+  timestamp: number
+}
+
 // Types for the exposed Electron API
 interface ElectronAPI {
   updateContentDimensions: (dimensions: {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }) => Promise<{ success: boolean }>
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (
@@ -52,10 +80,10 @@ interface ElectronAPI {
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean; hasAlibabaKey: boolean; technicalGlossaryConfig?: any }>
 
   // STT Provider Management
-  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => Promise<{ success: boolean; error?: string }>
+  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => Promise<{ success: boolean; error?: string }>
   getSttProvider: () => Promise<string>
   setGroqSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenAiSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
@@ -66,10 +94,19 @@ interface ElectronAPI {
   setIbmWatsonApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqSttModel: (model: string) => Promise<{ success: boolean; error?: string }>
   setSonioxApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
+  setAlibabaSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  getTechnicalGlossary: () => Promise<any>
+  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; error?: string }>
+  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
+  startSttCompareSession: () => Promise<{ success: boolean; error?: string }>
+  stopSttCompareSession: () => Promise<{ success: boolean; error?: string }>
+  getSttCompareResults: () => Promise<any>
+  exportSttBenchmarkReport: () => Promise<{ success: boolean; jsonPath?: string; markdownPath?: string; error?: string }>
+  onSttCompareUpdate: (callback: (data: any) => void) => () => void
 
   // Native Audio Service Events
-  onNativeAudioTranscript: (callback: (transcript: { speaker: string; text: string; final: boolean }) => void) => () => void
+  onNativeAudioTranscript: (callback: (transcript: NativeAudioTranscript) => void) => () => void
+  onNativeAudioSpeechEnded: (callback: (event: NativeAudioSpeechEnded) => void) => () => void
   onNativeAudioSuggestion: (callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void) => () => void
   onNativeAudioConnected: (callback: () => void) => () => void
   onNativeAudioDisconnected: (callback: () => void) => () => void
@@ -149,9 +186,11 @@ interface ElectronAPI {
 
   // Database
   flushDatabase: () => Promise<{ success: boolean }>
+  getOverlayWindowState: () => Promise<OverlayWindowState>
   showWindow: () => Promise<void>
   hideWindow: () => Promise<void>
   onToggleExpand: (callback: () => void) => () => void
+  onWindowVisibilityChanged: (callback: (state: OverlayWindowState) => void) => () => void
   toggleAdvancedSettings: () => Promise<void>
 
   // Streaming listeners
@@ -230,6 +269,18 @@ interface ElectronAPI {
   profileResearchCompany: (companyName: string) => Promise<{ success: boolean; dossier?: any; error?: string }>;
   profileGenerateNegotiation: () => Promise<{ success: boolean; dossier?: any; profileData?: any; error?: string }>;
 
+  // Project Library API
+  projectLibraryListProjects: () => Promise<any[]>;
+  projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
+  projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>;
+  projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
+  projectLibraryGetProjectFacts: (projectId: string) => Promise<any>;
+  projectLibrarySetActiveProjects: (projectIds: string[]) => Promise<{ success: boolean; state?: any; error?: string }>;
+  projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => Promise<{ success: boolean; state?: any; error?: string }>;
+  projectLibrarySetJDBias: (enabled: boolean) => Promise<{ success: boolean; state?: any; error?: string }>;
+  projectLibrarySelectAssets: () => Promise<{ success?: boolean; cancelled?: boolean; filePaths?: string[]; error?: string }>;
+  projectLibrarySelectRepo: () => Promise<{ success?: boolean; cancelled?: boolean; repoPath?: string; error?: string }>;
+
   // Google Search API
   setGoogleSearchApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   setGoogleSearchCseId: (cseId: string) => Promise<{ success: boolean; error?: string }>;
@@ -265,6 +316,8 @@ export const PROCESSING_EVENTS = {
 contextBridge.exposeInMainWorld("electronAPI", {
   updateContentDimensions: (dimensions: { width: number; height: number }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
+  setOverlayBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke("set-overlay-bounds", bounds),
   getRecognitionLanguages: () => ipcRenderer.invoke("get-recognition-languages"),
   takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
   takeSelectiveScreenshot: () => ipcRenderer.invoke("take-selective-screenshot"),
@@ -391,6 +444,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   toggleWindow: () => ipcRenderer.invoke("toggle-window"),
   showWindow: () => ipcRenderer.invoke("show-window"),
   hideWindow: () => ipcRenderer.invoke("hide-window"),
+  getOverlayWindowState: () => ipcRenderer.invoke("get-overlay-window-state"),
   toggleAdvancedSettings: () => ipcRenderer.invoke("toggle-advanced-settings"),
   openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
   setUndetectable: (state: boolean) => ipcRenderer.invoke("set-undetectable", state),
@@ -423,6 +477,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
   },
 
+  onWindowVisibilityChanged: (callback: (state: OverlayWindowState) => void) => {
+    const subscription = (_: any, state: OverlayWindowState) => callback(state)
+    ipcRenderer.on("window-visibility-changed", subscription)
+    return () => {
+      ipcRenderer.removeListener("window-visibility-changed", subscription)
+    }
+  },
+
   // LLM Model Management
   getCurrentLlmConfig: () => ipcRenderer.invoke("get-current-llm-config"),
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
@@ -439,7 +501,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getStoredCredentials: () => ipcRenderer.invoke("get-stored-credentials"),
 
   // STT Provider Management
-  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => ipcRenderer.invoke("set-stt-provider", provider),
+  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => ipcRenderer.invoke("set-stt-provider", provider),
   getSttProvider: () => ipcRenderer.invoke("get-stt-provider"),
   setGroqSttApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-stt-api-key", apiKey),
   setOpenAiSttApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-stt-api-key", apiKey),
@@ -450,14 +512,35 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setIbmWatsonApiKey: (apiKey: string) => ipcRenderer.invoke("set-ibmwatson-api-key", apiKey),
   setGroqSttModel: (model: string) => ipcRenderer.invoke("set-groq-stt-model", model),
   setSonioxApiKey: (apiKey: string) => ipcRenderer.invoke("set-soniox-api-key", apiKey),
-  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => ipcRenderer.invoke("test-stt-connection", provider, apiKey, region),
+  setAlibabaSttApiKey: (apiKey: string) => ipcRenderer.invoke("set-alibaba-stt-api-key", apiKey),
+  getTechnicalGlossary: () => ipcRenderer.invoke("get-technical-glossary"),
+  setTechnicalGlossary: (config: any) => ipcRenderer.invoke("set-technical-glossary", config),
+  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => ipcRenderer.invoke("test-stt-connection", provider, apiKey, region),
+  startSttCompareSession: () => ipcRenderer.invoke("start-stt-compare-session"),
+  stopSttCompareSession: () => ipcRenderer.invoke("stop-stt-compare-session"),
+  getSttCompareResults: () => ipcRenderer.invoke("get-stt-compare-results"),
+  exportSttBenchmarkReport: () => ipcRenderer.invoke("export-stt-benchmark-report"),
+  onSttCompareUpdate: (callback: (data: any) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on("stt-compare-update", subscription)
+    return () => {
+      ipcRenderer.removeListener("stt-compare-update", subscription)
+    }
+  },
 
   // Native Audio Service Events
-  onNativeAudioTranscript: (callback: (transcript: { speaker: string; text: string; final: boolean }) => void) => {
+  onNativeAudioTranscript: (callback: (transcript: NativeAudioTranscript) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("native-audio-transcript", subscription)
     return () => {
       ipcRenderer.removeListener("native-audio-transcript", subscription)
+    }
+  },
+  onNativeAudioSpeechEnded: (callback: (event: NativeAudioSpeechEnded) => void) => {
+    const subscription = (_: any, data: NativeAudioSpeechEnded) => callback(data)
+    ipcRenderer.on("native-audio-speech-ended", subscription)
+    return () => {
+      ipcRenderer.removeListener("native-audio-speech-ended", subscription)
     }
   },
   onNativeAudioSuggestion: (callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void) => {
@@ -894,6 +977,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   profileDeleteJD: () => ipcRenderer.invoke('profile:delete-jd'),
   profileResearchCompany: (companyName: string) => ipcRenderer.invoke('profile:research-company', companyName),
   profileGenerateNegotiation: () => ipcRenderer.invoke('profile:generate-negotiation'),
+
+  // Project Library API
+  projectLibraryListProjects: () => ipcRenderer.invoke('projectLibrary:listProjects'),
+  projectLibraryUpsertProject: (project: any) => ipcRenderer.invoke('projectLibrary:upsertProject', project),
+  projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => ipcRenderer.invoke('projectLibrary:attachAssets', payload),
+  projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => ipcRenderer.invoke('projectLibrary:attachRepo', payload),
+  projectLibraryGetProjectFacts: (projectId: string) => ipcRenderer.invoke('projectLibrary:getProjectFacts', projectId),
+  projectLibrarySetActiveProjects: (projectIds: string[]) => ipcRenderer.invoke('projectLibrary:setActiveProjects', projectIds),
+  projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => ipcRenderer.invoke('projectLibrary:setAnswerMode', mode),
+  projectLibrarySetJDBias: (enabled: boolean) => ipcRenderer.invoke('projectLibrary:setJDBias', enabled),
+  projectLibrarySelectAssets: () => ipcRenderer.invoke('projectLibrary:selectAssets'),
+  projectLibrarySelectRepo: () => ipcRenderer.invoke('projectLibrary:selectRepo'),
 
   // Google Search API
   setGoogleSearchApiKey: (apiKey: string) => ipcRenderer.invoke('set-google-search-api-key', apiKey),

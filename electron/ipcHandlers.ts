@@ -6,6 +6,7 @@ import { GEMINI_FLASH_MODEL } from "./IntelligenceManager"
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
 import * as path from "path";
 import * as fs from "fs";
+import { DocType } from "./projectLibrary/types";
 import { AudioDevices } from "./audio/AudioDevices";
 import curl2Json from "@bany/curl-to-json";
 import { deepVariableReplacer, getByPath } from "./utils/curlUtils";
@@ -437,6 +438,22 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   )
 
+  safeHandle(
+    "set-overlay-bounds",
+    async (event, bounds: { x: number; y: number; width: number; height: number }) => {
+      if (!bounds) return
+
+      const overlayWin = appState.getWindowHelper().getOverlayWindow()
+      const senderWebContents = event.sender
+
+      if (overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === senderWebContents.id) {
+        appState.getWindowHelper().setOverlayBounds(bounds)
+      }
+
+      return { success: true }
+    }
+  )
+
   safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
     appState.getWindowHelper().setWindowMode(mode);
     return { success: true };
@@ -516,6 +533,10 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("hide-window", async () => {
     appState.hideMainWindow()
+  })
+
+  safeHandle("get-overlay-window-state", async () => {
+    return appState.getWindowHelper().getOverlayWindowState()
   })
 
   safeHandle("reset-queues", async () => {
@@ -1209,6 +1230,8 @@ export function initializeIpcHandlers(appState: AppState): void {
         hasIbmWatsonKey: hasKey(creds.ibmWatsonApiKey),
         ibmWatsonRegion: creds.ibmWatsonRegion || 'us-south',
         hasSonioxKey: hasKey(creds.sonioxApiKey),
+        hasAlibabaKey: hasKey(manager.getAlibabaSttApiKey()),
+        technicalGlossaryConfig: manager.getTechnicalGlossaryConfig(),
         hasGoogleSearchKey: hasKey(creds.googleSearchApiKey),
         hasGoogleSearchCseId: hasKey(creds.googleSearchCseId),
         // Dynamic Model Discovery - preferred models
@@ -1218,7 +1241,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         claudePreferredModel: creds.claudePreferredModel || undefined,
       };
     } catch (error: any) {
-      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, googleServiceAccountPath: null, sttProvider: 'google', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasGoogleSearchKey: false, hasGoogleSearchCseId: false };
+      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, googleServiceAccountPath: null, sttProvider: 'google', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasAlibabaKey: false, technicalGlossaryConfig: null, hasGoogleSearchKey: false, hasGoogleSearchCseId: false };
     }
   });
 
@@ -1266,7 +1289,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // STT Provider Management Handlers
   // ==========================================
 
-  safeHandle("set-stt-provider", async (_, provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+  safeHandle("set-stt-provider", async (_, provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSttProvider(provider);
@@ -1294,6 +1317,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqSttApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Groq STT API key:", error);
@@ -1305,6 +1330,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setOpenAiSttApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving OpenAI STT API key:", error);
@@ -1316,6 +1343,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setDeepgramApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Deepgram API key:", error);
@@ -1342,6 +1371,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setElevenLabsApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving ElevenLabs API key:", error);
@@ -1353,6 +1384,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setAzureApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Azure API key:", error);
@@ -1379,6 +1412,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setIbmWatsonApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving IBM Watson API key:", error);
@@ -1390,9 +1425,44 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSonioxApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Soniox API key:", error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("set-alibaba-stt-api-key", async (_, apiKey: string) => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      CredentialsManager.getInstance().setAlibabaSttApiKey(apiKey);
+      await appState.reconfigureSttProvider();
+      appState.refreshSttCompareSession();
+      return { success: true };
+    } catch (error: any) {
+      console.error("Error saving Alibaba STT API key:", error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("get-technical-glossary", async () => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      return CredentialsManager.getInstance().getTechnicalGlossaryConfig();
+    } catch (error: any) {
+      console.error("Error getting technical glossary:", error);
+      return null;
+    }
+  });
+
+  safeHandle("set-technical-glossary", async (_, config: any) => {
+    try {
+      appState.setTechnicalGlossaryConfig(config);
+      return { success: true };
+    } catch (error: any) {
+      console.error("Error saving technical glossary:", error);
       return { success: false, error: error.message };
     }
   });
@@ -1403,7 +1473,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     return msg.replace(/:\s*[a-zA-Z0-9*]+\*+[a-zA-Z0-9*]+\.?$/g, '').trim();
   };
 
-  safeHandle("test-stt-connection", async (_, provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => {
+  safeHandle("test-stt-connection", async (_, provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => {
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
       const normalizedApiKey = apiKey.trim();
@@ -1471,6 +1541,93 @@ export function initializeIpcHandlers(appState: AppState): void {
               resolve({ success: true });
             }
             ws.close();
+          });
+
+          ws.on('error', (err: any) => {
+            clearTimeout(timeout);
+            resolve({ success: false, error: err.message || 'Connection failed' });
+          });
+        });
+      }
+
+      if (provider === 'alibaba') {
+        const WebSocket = require('ws');
+        const { v4: uuidv4 } = require('uuid');
+        const { CredentialsManager } = require('./services/CredentialsManager');
+        const glossaryConfig = CredentialsManager.getInstance().getTechnicalGlossaryConfig();
+
+        return await new Promise<{ success: boolean; error?: string }>((resolve) => {
+          const headers: Record<string, string> = {
+            Authorization: `Bearer ${normalizedApiKey}`,
+            'user-agent': 'natively-stt-test/1.0',
+          };
+
+          if (glossaryConfig?.alibabaWorkspaceId) {
+            headers['X-DashScope-WorkSpace'] = glossaryConfig.alibabaWorkspaceId;
+          }
+
+          const taskId = uuidv4();
+          const ws = new WebSocket('wss://dashscope.aliyuncs.com/api-ws/v1/inference', { headers });
+
+          const timeout = setTimeout(() => {
+            ws.close();
+            resolve({ success: false, error: 'Connection timed out' });
+          }, 15000);
+
+          ws.on('open', () => {
+            ws.send(JSON.stringify({
+              header: {
+                action: 'run-task',
+                task_id: taskId,
+                streaming: 'duplex',
+              },
+              payload: {
+                task_group: 'audio',
+                task: 'asr',
+                function: 'recognition',
+                model: 'paraformer-realtime-v2',
+                parameters: {
+                  format: 'pcm',
+                  sample_rate: 16000,
+                  punctuation_prediction_enabled: true,
+                  inverse_text_normalization_enabled: true,
+                  semantic_punctuation_enabled: true,
+                  heartbeat: true,
+                  ...(glossaryConfig?.alibabaVocabularyId ? { vocabulary_id: glossaryConfig.alibabaVocabularyId } : {}),
+                },
+                input: {},
+              },
+            }));
+          });
+
+          ws.on('message', (msg: any) => {
+            try {
+              const res = JSON.parse(msg.toString());
+              const eventType = res?.header?.event;
+              if (eventType === 'task-started') {
+                clearTimeout(timeout);
+                try {
+                  ws.send(JSON.stringify({
+                    header: {
+                      action: 'finish-task',
+                      task_id: taskId,
+                      streaming: 'duplex',
+                    },
+                    payload: {
+                      input: {},
+                    },
+                  }));
+                } catch { }
+                ws.close();
+                resolve({ success: true });
+              } else if (eventType === 'task-failed') {
+                clearTimeout(timeout);
+                ws.close();
+                resolve({ success: false, error: res?.header?.error_message || 'Alibaba task failed' });
+              }
+            } catch {
+              // ignore parse failures while waiting for task-started
+            }
           });
 
           ws.on('error', (err: any) => {
@@ -1790,6 +1947,24 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("set-recognition-language", async (_, key: string) => {
     appState.setRecognitionLanguage(key);
     return { success: true };
+  });
+
+  safeHandle("start-stt-compare-session", async () => {
+    appState.startSttCompareSession();
+    return { success: true };
+  });
+
+  safeHandle("stop-stt-compare-session", async () => {
+    appState.stopSttCompareSession();
+    return { success: true };
+  });
+
+  safeHandle("get-stt-compare-results", async () => {
+    return appState.getSttCompareResults();
+  });
+
+  safeHandle("export-stt-benchmark-report", async () => {
+    return appState.exportSttBenchmarkReport();
   });
 
   // ==========================================
@@ -2314,17 +2489,11 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("profile:upload-resume", async (_, filePath: string) => {
     try {
-      // Premium gate: require active license for profile features
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (!LicenseManager.getInstance().isPremium()) {
-        return { success: false, error: 'Pro license required. Please activate a license key to use Profile Intelligence features.' };
-      }
       console.log(`[IPC] profile:upload-resume called with: ${filePath}`);
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
       }
-      const { DocType } = require('../premium/electron/knowledge/types');
       const result = await orchestrator.ingestDocument(filePath, DocType.RESUME);
       return result;
     } catch (error: any) {
@@ -2355,13 +2524,6 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("profile:set-mode", async (_, enabled: boolean) => {
     try {
-      // Premium gate: only allow enabling profile mode with active license
-      if (enabled) {
-        const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-        if (!LicenseManager.getInstance().isPremium()) {
-          return { success: false, error: 'Pro license required. Please activate a license key to use Profile Intelligence features.' };
-        }
-      }
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
@@ -2379,7 +2541,6 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
-      const { DocType } = require('../premium/electron/knowledge/types');
       orchestrator.deleteDocumentsByType(DocType.RESUME);
       return { success: true };
     } catch (error: any) {
@@ -2422,17 +2583,11 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("profile:upload-jd", async (_, filePath: string) => {
     try {
-      // Premium gate
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (!LicenseManager.getInstance().isPremium()) {
-        return { success: false, error: 'Pro license required. Please activate a license key to use Profile Intelligence features.' };
-      }
       console.log(`[IPC] profile:upload-jd called with: ${filePath}`);
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
       }
-      const { DocType } = require('../premium/electron/knowledge/types');
       const result = await orchestrator.ingestDocument(filePath, DocType.JD);
       return result;
     } catch (error: any) {
@@ -2447,7 +2602,6 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
-      const { DocType } = require('../premium/electron/knowledge/types');
       orchestrator.deleteDocumentsByType(DocType.JD);
       return { success: true };
     } catch (error: any) {
@@ -2456,84 +2610,138 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle("profile:research-company", async (_, companyName: string) => {
+    return {
+      success: false,
+      error: `Company research is not part of the current open-source project library build. "${companyName}" was not processed.`,
+    };
+  });
+
+  safeHandle("profile:generate-negotiation", async () => {
+    return {
+      success: false,
+      error: 'Negotiation scripts are not part of the current open-source project library build.',
+    };
+  });
+
+  safeHandle("projectLibrary:listProjects", async () => {
+    const orchestrator = appState.getKnowledgeOrchestrator();
+    if (!orchestrator) return [];
+    return orchestrator.listProjects();
+  });
+
+  safeHandle("projectLibrary:upsertProject", async (_, project: any) => {
     try {
-      // Premium gate
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (!LicenseManager.getInstance().isPremium()) {
-        return { success: false, error: 'Pro license required. Please activate a license key to use Profile Intelligence features.' };
-      }
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
-      const engine = orchestrator.getCompanyResearchEngine();
-
-      // Wire Google Custom Search provider if keys are configured
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      const cm = CredentialsManager.getInstance();
-      const googleSearchKey = cm.getGoogleSearchApiKey();
-      const googleSearchCseId = cm.getGoogleSearchCseId();
-      if (googleSearchKey && googleSearchCseId) {
-        const { GoogleCustomSearchProvider } = require('../premium/electron/knowledge/GoogleCustomSearchProvider');
-        engine.setSearchProvider(new GoogleCustomSearchProvider(googleSearchKey, googleSearchCseId));
-      }
-
-      // Build full JD context so the dossier is tailored to the exact role
-      const profileData = orchestrator.getProfileData();
-      const activeJD = profileData?.activeJD;
-      const jdCtx = activeJD ? {
-        title: activeJD.title,
-        location: activeJD.location,
-        level: activeJD.level,
-        technologies: activeJD.technologies,
-        requirements: activeJD.requirements,
-        keywords: activeJD.keywords,
-        compensation_hint: activeJD.compensation_hint,
-        min_years_experience: activeJD.min_years_experience,
-      } : {};
-      const dossier = await engine.researchCompany(companyName, jdCtx, true);
-      return { success: true, dossier };
+      const saved = orchestrator.upsertProject(project);
+      return { success: true, project: saved };
     } catch (error: any) {
-      console.error('[IPC] profile:research-company error:', error);
       return { success: false, error: error.message };
     }
   });
 
-  safeHandle("profile:generate-negotiation", async () => {
+  safeHandle("projectLibrary:attachAssets", async (_, { projectId, filePaths }: { projectId: string; filePaths: string[] }) => {
     try {
-      // Premium gate
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (!LicenseManager.getInstance().isPremium()) {
-        return { success: false, error: 'Pro license required. Please activate a license key to use Profile Intelligence features.' };
-      }
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
-      const profileData = orchestrator.getProfileData();
-      if (!profileData) {
-        return { success: false, error: 'No resume uploaded' };
-      }
-
-      // Get the active documents and dossier
-      const status = orchestrator.getStatus();
-      if (!status.hasResume) {
-        return { success: false, error: 'No resume loaded' };
-      }
-
-      // Use the research engine to get cached dossier if a JD is active
-      let dossier = null;
-      if (profileData.activeJD?.company) {
-        const engine = orchestrator.getCompanyResearchEngine();
-        dossier = engine.getCachedDossier(profileData.activeJD.company);
-      }
-
-      const { generateNegotiationScript } = require('../premium/electron/knowledge/NegotiationEngine');
-      // We need access to internal docs - use the orchestrator's methods
-      // For now, return the dossier data so the frontend can display it
-      return { success: true, dossier, profileData };
+      return await orchestrator.attachAssets(projectId, filePaths);
     } catch (error: any) {
-      console.error('[IPC] profile:generate-negotiation error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:attachRepo", async (_, { projectId, repoPath }: { projectId: string; repoPath: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return await orchestrator.attachRepo(projectId, repoPath);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:getProjectFacts", async (_, projectId: string) => {
+    const orchestrator = appState.getKnowledgeOrchestrator();
+    if (!orchestrator) return null;
+    return orchestrator.getProjectFacts(projectId);
+  });
+
+  safeHandle("projectLibrary:setActiveProjects", async (_, projectIds: string[]) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      const state = orchestrator.setActiveProjects(projectIds);
+      return { success: true, state };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:setAnswerMode", async (_, mode: "strict" | "polished") => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      const state = orchestrator.setAnswerMode(mode);
+      return { success: true, state };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:setJDBias", async (_, enabled: boolean) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      const state = orchestrator.setJDBiasEnabled(enabled);
+      return { success: true, state };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:selectAssets", async () => {
+    try {
+      const result: any = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'Project Assets', extensions: ['pdf', 'docx', 'txt', 'md', 'png', 'jpg', 'jpeg', 'webp', 'ipynb', 'json', 'ts', 'tsx', 'js', 'jsx', 'py'] }
+        ]
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { cancelled: true };
+      }
+
+      return { success: true, filePaths: result.filePaths };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:selectRepo", async () => {
+    try {
+      const result: any = await dialog.showOpenDialog({
+        properties: ['openDirectory']
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { cancelled: true };
+      }
+
+      return { success: true, repoPath: result.filePaths[0] };
+    } catch (error: any) {
       return { success: false, error: error.message };
     }
   });

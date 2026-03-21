@@ -1,8 +1,22 @@
 export interface ElectronAPI {
+  getOverlayWindowState: () => Promise<{
+    visible: boolean
+    mode: 'launcher' | 'overlay'
+    overlayVisible: boolean
+    launcherVisible: boolean
+    overlayAlwaysOnTop: boolean
+    overlayFocused: boolean
+  }>
   updateContentDimensions: (dimensions: {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }) => Promise<{ success: boolean }>
   onToggleExpand: (callback: () => void) => () => void
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
@@ -38,6 +52,14 @@ export interface ElectronAPI {
   toggleWindow: () => Promise<void>
   showWindow: () => Promise<void>
   hideWindow: () => Promise<void>
+  onWindowVisibilityChanged: (callback: (state: {
+    visible: boolean
+    mode: 'launcher' | 'overlay'
+    overlayVisible: boolean
+    launcherVisible: boolean
+    overlayAlwaysOnTop: boolean
+    overlayFocused: boolean
+  }) => void) => () => void
   openExternal: (url: string) => Promise<void>
   setUndetectable: (state: boolean) => Promise<{ success: boolean; error?: string }>
   getUndetectable: () => Promise<boolean>
@@ -65,10 +87,10 @@ export interface ElectronAPI {
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasAlibabaKey?: boolean; technicalGlossaryConfig?: any; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string }>
 
   // STT Provider Management
-  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => Promise<{ success: boolean; error?: string }>
+  setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => Promise<{ success: boolean; error?: string }>
   getSttProvider: () => Promise<string>
   setGroqSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenAiSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
@@ -79,10 +101,28 @@ export interface ElectronAPI {
   setIbmWatsonApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqSttModel: (model: string) => Promise<{ success: boolean; error?: string }>
   setSonioxApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
+  setAlibabaSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  getTechnicalGlossary: () => Promise<any>
+  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; error?: string }>
+  testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
+  startSttCompareSession: () => Promise<{ success: boolean; error?: string }>
+  stopSttCompareSession: () => Promise<{ success: boolean; error?: string }>
+  getSttCompareResults: () => Promise<any>
+  exportSttBenchmarkReport: () => Promise<{ success: boolean; jsonPath?: string; markdownPath?: string; error?: string }>
+  onSttCompareUpdate: (callback: (data: any) => void) => () => void
 
   // Native Audio Service Events
-  onNativeAudioTranscript: (callback: (transcript: { speaker: string; text: string; final: boolean }) => void) => () => void
+  onNativeAudioTranscript: (callback: (transcript: {
+    speaker: string
+    text: string
+    final: boolean
+    timestamp: number
+    confidence: number
+  }) => void) => () => void
+  onNativeAudioSpeechEnded: (callback: (event: {
+    speaker: 'interviewer' | 'user'
+    timestamp: number
+  }) => void) => () => void
   onNativeAudioSuggestion: (callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void) => () => void
   onNativeAudioConnected: (callback: () => void) => () => void
   onNativeAudioDisconnected: (callback: () => void) => () => void
@@ -265,6 +305,17 @@ export interface ElectronAPI {
   profileDeleteJD: () => Promise<{ success: boolean; error?: string }>
   profileResearchCompany: (companyName: string) => Promise<{ success: boolean; dossier?: any; error?: string }>
   profileGenerateNegotiation: () => Promise<{ success: boolean; dossier?: any; profileData?: any; error?: string }>
+
+  projectLibraryListProjects: () => Promise<any[]>
+  projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
+  projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>
+  projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
+  projectLibraryGetProjectFacts: (projectId: string) => Promise<any>
+  projectLibrarySetActiveProjects: (projectIds: string[]) => Promise<{ success: boolean; state?: any; error?: string }>
+  projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => Promise<{ success: boolean; state?: any; error?: string }>
+  projectLibrarySetJDBias: (enabled: boolean) => Promise<{ success: boolean; state?: any; error?: string }>
+  projectLibrarySelectAssets: () => Promise<{ success?: boolean; cancelled?: boolean; filePaths?: string[]; error?: string }>
+  projectLibrarySelectRepo: () => Promise<{ success?: boolean; cancelled?: boolean; repoPath?: string; error?: string }>
 
   // Google Search API
   setGoogleSearchApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>

@@ -6,6 +6,12 @@
 import { app, safeStorage } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import {
+    DEFAULT_TECHNICAL_GLOSSARY,
+    TechnicalGlossaryConfig,
+    parseTechnicalGlossaryText,
+    normalizeTechnicalGlossaryConfig,
+} from '../stt/TechnicalGlossary';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
@@ -33,7 +39,7 @@ export interface StoredCredentials {
     curlProviders?: CurlProvider[];
     defaultModel?: string;
     // STT Provider settings
-    sttProvider?: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox';
+    sttProvider?: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba';
     groqSttApiKey?: string;
     groqSttModel?: string;
     openAiSttApiKey?: string;
@@ -44,6 +50,8 @@ export interface StoredCredentials {
     ibmWatsonApiKey?: string;
     ibmWatsonRegion?: string;
     sonioxApiKey?: string;
+    alibabaSttApiKey?: string;
+    technicalGlossaryConfig?: TechnicalGlossaryConfig;
     sttLanguage?: string;
     aiResponseLanguage?: string;
     // Google Custom Search
@@ -108,7 +116,7 @@ export class CredentialsManager {
         return this.credentials.customProviders || [];
     }
 
-    public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' {
+    public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba' {
         const envProvider = process.env.NATIVELY_STT_PROVIDER as StoredCredentials['sttProvider'] | undefined;
         return envProvider || this.credentials.sttProvider || 'google';
     }
@@ -153,6 +161,31 @@ export class CredentialsManager {
         return this.credentials.sonioxApiKey;
     }
 
+    public getAlibabaSttApiKey(): string | undefined {
+        return process.env.ALIBABA_STT_API_KEY || process.env.NATIVELY_ALIBABA_STT_API_KEY || this.credentials.alibabaSttApiKey;
+    }
+
+    public getTechnicalGlossaryConfig(): TechnicalGlossaryConfig {
+        const envGlossaryPath = process.env.NATIVELY_TECHNICAL_GLOSSARY_PATH || process.env.TECHNICAL_GLOSSARY_PATH;
+        const envGlossaryText = process.env.NATIVELY_TECHNICAL_GLOSSARY_TEXT;
+        const baseConfig = normalizeTechnicalGlossaryConfig(this.credentials.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY);
+
+        let envConfig = baseConfig;
+
+        if (envGlossaryPath && fs.existsSync(envGlossaryPath)) {
+            const rawText = fs.readFileSync(envGlossaryPath, 'utf-8');
+            envConfig = parseTechnicalGlossaryText(rawText, baseConfig);
+        } else if (envGlossaryText?.trim()) {
+            envConfig = parseTechnicalGlossaryText(envGlossaryText, baseConfig);
+        }
+
+        return normalizeTechnicalGlossaryConfig({
+            ...envConfig,
+            alibabaWorkspaceId: process.env.NATIVELY_ALIBABA_WORKSPACE_ID || envConfig.alibabaWorkspaceId,
+            alibabaVocabularyId: process.env.NATIVELY_ALIBABA_VOCABULARY_ID || envConfig.alibabaVocabularyId,
+        });
+    }
+
     public getGoogleSearchApiKey(): string | undefined {
         return this.credentials.googleSearchApiKey;
     }
@@ -162,7 +195,7 @@ export class CredentialsManager {
     }
 
     public getSttLanguage(): string {
-        return this.credentials.sttLanguage || 'english-us';
+        return process.env.NATIVELY_STT_LANGUAGE || this.credentials.sttLanguage || 'english-us';
     }
 
     public getAiResponseLanguage(): string {
@@ -210,7 +243,7 @@ export class CredentialsManager {
         console.log('[CredentialsManager] Google Service Account path updated');
     }
 
-    public setSttProvider(provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'): void {
+    public setSttProvider(provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'): void {
         this.credentials.sttProvider = provider;
         this.saveCredentials();
         console.log(`[CredentialsManager] STT Provider set to: ${provider}`);
@@ -274,6 +307,18 @@ export class CredentialsManager {
         this.credentials.sonioxApiKey = key;
         this.saveCredentials();
         console.log('[CredentialsManager] Soniox API Key updated');
+    }
+
+    public setAlibabaSttApiKey(key: string): void {
+        this.credentials.alibabaSttApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Alibaba STT API Key updated');
+    }
+
+    public setTechnicalGlossaryConfig(config: TechnicalGlossaryConfig): void {
+        this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(config);
+        this.saveCredentials();
+        console.log('[CredentialsManager] Technical glossary config updated');
     }
 
     public setGoogleSearchApiKey(key: string): void {
@@ -433,6 +478,9 @@ export class CredentialsManager {
                     const parsed = JSON.parse(decrypted);
                     if (typeof parsed === 'object' && parsed !== null) {
                         this.credentials = parsed;
+                        this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(
+                            this.credentials.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY
+                        );
                         console.log('[CredentialsManager] Loaded encrypted credentials');
                     } else {
                         throw new Error('Decrypted credentials is not a valid object');
@@ -463,6 +511,9 @@ export class CredentialsManager {
                     const parsed = JSON.parse(data);
                     if (typeof parsed === 'object' && parsed !== null) {
                         this.credentials = parsed;
+                        this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(
+                            this.credentials.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY
+                        );
                         console.log('[CredentialsManager] Loaded plaintext credentials');
                     } else {
                         throw new Error('Plaintext credentials is not a valid object');
@@ -475,9 +526,11 @@ export class CredentialsManager {
             }
 
             console.log('[CredentialsManager] No stored credentials found');
+            this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(DEFAULT_TECHNICAL_GLOSSARY);
         } catch (error) {
             console.error('[CredentialsManager] Failed to load credentials:', error);
             this.credentials = {};
+            this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(DEFAULT_TECHNICAL_GLOSSARY);
         }
     }
 }

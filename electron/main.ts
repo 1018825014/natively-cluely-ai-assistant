@@ -80,17 +80,26 @@ import { DeepgramStreamingSTT } from "./audio/DeepgramStreamingSTT"
 import { SonioxStreamingSTT } from "./audio/SonioxStreamingSTT"
 import { ElevenLabsStreamingSTT } from "./audio/ElevenLabsStreamingSTT"
 import { OpenAIStreamingSTT } from "./audio/OpenAIStreamingSTT"
+import { AlibabaParaformerSTT } from "./audio/AlibabaParaformerSTT"
 import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
+import { ProjectKnowledgeStore } from "./projectLibrary/ProjectKnowledgeStore"
+import { ProjectKnowledgeOrchestrator } from "./projectLibrary/ProjectKnowledgeOrchestrator"
 import { warmupIntentClassifier } from "./llm"
+import { SttCompareRecorder, SttCompareProviderDescriptor, CompareSpeaker } from "./stt/SttCompareRecorder"
+import { buildSttBenchmarkReport } from "./stt/SttBenchmark"
+import { TechnicalGlossaryConfig } from "./stt/TechnicalGlossary"
 
 /** Unified type for all STT providers with optional extended capabilities */
-type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT) & {
+type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | AlibabaParaformerSTT) & {
   finalize?: () => void;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
+  setTechnicalGlossaryConfig?: (config?: TechnicalGlossaryConfig | null) => void;
 };
+
+type ConfiguredSttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba';
 
 // Premium: Knowledge modules loaded conditionally
 let KnowledgeOrchestratorClass: any = null;
@@ -337,9 +346,9 @@ export class AppState {
       const db = DatabaseManager.getInstance();
       const sqliteDb = db.getDb();
 
-      if (sqliteDb && KnowledgeDatabaseManagerClass && KnowledgeOrchestratorClass) {
-        const knowledgeDb = new KnowledgeDatabaseManagerClass(sqliteDb);
-        this.knowledgeOrchestrator = new KnowledgeOrchestratorClass(knowledgeDb);
+      if (sqliteDb) {
+        const knowledgeStore = new ProjectKnowledgeStore(sqliteDb);
+        this.knowledgeOrchestrator = new ProjectKnowledgeOrchestrator(knowledgeStore);
 
         // Wire up LLM functions
         const llmHelper = this.processingHelper.getLLMHelper();
@@ -550,14 +559,289 @@ export class AppState {
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
+  private pendingLiveRagTranscript: Record<CompareSpeaker, { text: string; timestamp: number } | null> = {
+    interviewer: null,
+    user: null,
+  };
+  private sttCompareRecorder: SttCompareRecorder = new SttCompareRecorder();
+  private compareShadowProviders: Record<CompareSpeaker, Map<string, STTProvider>> = {
+    interviewer: new Map(),
+    user: new Map(),
+  };
 
-  private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    const sttProvider = CredentialsManager.getInstance().getSttProvider();
-    const sttLanguage = CredentialsManager.getInstance().getSttLanguage();
+  private getConfiguredSttProviderId(): ConfiguredSttProviderId {
+    return CredentialsManager.getInstance().getSttProvider();
+  }
 
+  private getCurrentSttProviderId(): ConfiguredSttProviderId {
+    return this.resolveSttProviderId(this.getConfiguredSttProviderId());
+  }
+
+  private normalizeTranscriptForComparison(text: string): string {
+    return text
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/[\u3002\uFF01\uFF1F\uFF1B\uFF1A\uFF0C,.!?;:]/g, '');
+  }
+
+  private computeEditDistance(left: string, right: string): number {
+    const rows = left.length + 1;
+    const cols = right.length + 1;
+    const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+    for (let row = 0; row < rows; row += 1) matrix[row][0] = row;
+    for (let col = 0; col < cols; col += 1) matrix[0][col] = col;
+
+    for (let row = 1; row < rows; row += 1) {
+      for (let col = 1; col < cols; col += 1) {
+        const substitutionCost = left[row - 1] === right[col - 1] ? 0 : 1;
+        matrix[row][col] = Math.min(
+          matrix[row - 1][col] + 1,
+          matrix[row][col - 1] + 1,
+          matrix[row - 1][col - 1] + substitutionCost
+        );
+      }
+    }
+
+    return matrix[left.length][right.length];
+  }
+
+  private computeLongestCommonSubsequenceLength(left: string, right: string): number {
+    const rows = left.length + 1;
+    const cols = right.length + 1;
+    const matrix = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+
+    for (let row = 1; row < rows; row += 1) {
+      for (let col = 1; col < cols; col += 1) {
+        if (left[row - 1] === right[col - 1]) {
+          matrix[row][col] = matrix[row - 1][col - 1] + 1;
+        } else {
+          matrix[row][col] = Math.max(matrix[row - 1][col], matrix[row][col - 1]);
+        }
+      }
+    }
+
+    return matrix[left.length][right.length];
+  }
+
+  private calculateTranscriptSimilarity(previousText: string, nextText: string): number {
+    const previous = this.normalizeTranscriptForComparison(previousText);
+    const next = this.normalizeTranscriptForComparison(nextText);
+
+    if (!previous || !next) return 0;
+    if (previous === next) return 1;
+
+    return 1 - (this.computeEditDistance(previous, next) / Math.max(previous.length, next.length));
+  }
+
+  private calculateTranscriptOverlap(previousText: string, nextText: string): number {
+    const previous = this.normalizeTranscriptForComparison(previousText);
+    const next = this.normalizeTranscriptForComparison(nextText);
+
+    if (!previous || !next) return 0;
+
+    return this.computeLongestCommonSubsequenceLength(previous, next) / Math.min(previous.length, next.length);
+  }
+
+  private isTranscriptRefinement(previousText: string, nextText: string): boolean {
+    const previous = this.normalizeTranscriptForComparison(previousText);
+    const next = this.normalizeTranscriptForComparison(nextText);
+
+    if (!previous || !next) return false;
+    if (previous === next) return true;
+    if (next.startsWith(previous) || previous.startsWith(next)) return true;
+    if (Math.min(previous.length, next.length) < 16) return false;
+
+    return this.calculateTranscriptSimilarity(previous, next) >= 0.72 ||
+      this.calculateTranscriptOverlap(previous, next) >= 0.78;
+  }
+
+  private chooseMoreCompleteTranscript(previousText: string, nextText: string): string {
+    const previous = previousText.trim();
+    const next = nextText.trim();
+    const previousNormalized = this.normalizeTranscriptForComparison(previous);
+    const nextNormalized = this.normalizeTranscriptForComparison(next);
+
+    if (nextNormalized.length > previousNormalized.length) return next;
+    if (nextNormalized === previousNormalized && next.length >= previous.length) return next;
+
+    return previous;
+  }
+
+  private flushPendingLiveRagTranscript(speaker: CompareSpeaker): void {
+    if (!this.ragManager) return;
+
+    const pending = this.pendingLiveRagTranscript[speaker];
+    if (!pending?.text.trim()) return;
+
+    this.ragManager.feedLiveTranscript([{
+      speaker,
+      text: pending.text,
+      timestamp: pending.timestamp,
+    }]);
+
+    this.pendingLiveRagTranscript[speaker] = null;
+  }
+
+  private queueLiveRagTranscript(speaker: CompareSpeaker, text: string, timestamp: number): void {
+    if (!this.ragManager) return;
+
+    const nextText = text.trim();
+    if (!nextText) return;
+
+    const pending = this.pendingLiveRagTranscript[speaker];
+    if (!pending) {
+      this.pendingLiveRagTranscript[speaker] = { text: nextText, timestamp };
+      return;
+    }
+
+    const isRecent = Math.abs(timestamp - pending.timestamp) <= 5000;
+    if (isRecent && this.isTranscriptRefinement(pending.text, nextText)) {
+      this.pendingLiveRagTranscript[speaker] = {
+        text: this.chooseMoreCompleteTranscript(pending.text, nextText),
+        timestamp,
+      };
+      return;
+    }
+
+    if (this.normalizeTranscriptForComparison(pending.text) === this.normalizeTranscriptForComparison(nextText)) {
+      this.pendingLiveRagTranscript[speaker] = {
+        text: this.chooseMoreCompleteTranscript(pending.text, nextText),
+        timestamp,
+      };
+      return;
+    }
+
+    this.flushPendingLiveRagTranscript(speaker);
+    this.pendingLiveRagTranscript[speaker] = { text: nextText, timestamp };
+  }
+
+  private resolveSttProviderId(providerId: ConfiguredSttProviderId): ConfiguredSttProviderId {
+    const credentialsManager = CredentialsManager.getInstance();
+
+    switch (providerId) {
+      case 'deepgram':
+        return credentialsManager.getDeepgramApiKey() ? 'deepgram' : 'google';
+      case 'soniox':
+        return credentialsManager.getSonioxApiKey() ? 'soniox' : 'google';
+      case 'elevenlabs':
+        return credentialsManager.getElevenLabsApiKey() ? 'elevenlabs' : 'google';
+      case 'openai':
+        return credentialsManager.getOpenAiSttApiKey() ? 'openai' : 'google';
+      case 'alibaba':
+        return credentialsManager.getAlibabaSttApiKey() ? 'alibaba' : 'google';
+      case 'groq':
+        return credentialsManager.getGroqSttApiKey() ? 'groq' : 'google';
+      case 'azure':
+        return credentialsManager.getAzureApiKey() ? 'azure' : 'google';
+      case 'ibmwatson':
+        return credentialsManager.getIbmWatsonApiKey() ? 'ibmwatson' : 'google';
+      default:
+        return 'google';
+    }
+  }
+
+  private instantiateSttProvider(
+    providerId: ConfiguredSttProviderId,
+    speaker: 'interviewer' | 'user'
+  ): STTProvider {
+    const credentialsManager = CredentialsManager.getInstance();
     let stt: STTProvider;
 
+    if (providerId === 'deepgram') {
+      const apiKey = credentialsManager.getDeepgramApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using DeepgramStreamingSTT for ${speaker}`);
+        stt = new DeepgramStreamingSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for Deepgram STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'soniox') {
+      const apiKey = credentialsManager.getSonioxApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using SonioxStreamingSTT for ${speaker}`);
+        stt = new SonioxStreamingSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for Soniox STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'elevenlabs') {
+      const apiKey = credentialsManager.getElevenLabsApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using ElevenLabsStreamingSTT for ${speaker}`);
+        stt = new ElevenLabsStreamingSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for ElevenLabs STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'openai') {
+      const apiKey = credentialsManager.getOpenAiSttApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using OpenAIStreamingSTT for ${speaker}`);
+        stt = new OpenAIStreamingSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for OpenAI STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'alibaba') {
+      const apiKey = credentialsManager.getAlibabaSttApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using AlibabaParaformerSTT for ${speaker}`);
+        stt = new AlibabaParaformerSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for Alibaba STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'groq' || providerId === 'azure' || providerId === 'ibmwatson') {
+      let apiKey: string | undefined;
+      let region: string | undefined;
+      let modelOverride: string | undefined;
+
+      if (providerId === 'groq') {
+        apiKey = credentialsManager.getGroqSttApiKey();
+        modelOverride = credentialsManager.getGroqSttModel();
+      } else if (providerId === 'azure') {
+        apiKey = credentialsManager.getAzureApiKey();
+        region = credentialsManager.getAzureRegion();
+      } else {
+        apiKey = credentialsManager.getIbmWatsonApiKey();
+        region = credentialsManager.getIbmWatsonRegion();
+      }
+
+      if (apiKey) {
+        console.log(`[Main] Using RestSTT (${providerId}) for ${speaker}`);
+        stt = new RestSTT(providerId, apiKey, modelOverride, region);
+      } else {
+        console.warn(`[Main] No API key for ${providerId} STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else {
+      stt = new GoogleSTT();
+    }
+
+    this.applySharedSttConfig(stt, speaker);
+    return stt;
+  }
+
+  private applySharedSttConfig(stt: STTProvider, speaker: 'interviewer' | 'user'): void {
+    const credentialsManager = CredentialsManager.getInstance();
+    stt.setRecognitionLanguage(credentialsManager.getSttLanguage());
+    stt.setTechnicalGlossaryConfig?.(credentialsManager.getTechnicalGlossaryConfig());
+
+    const sampleRate = speaker === 'interviewer'
+      ? (this.systemAudioCapture?.getSampleRate() || 48000)
+      : (this.microphoneCapture?.getSampleRate() || 48000);
+
+    stt.setSampleRate(sampleRate);
+    stt.setAudioChannelCount?.(1);
+  }
+
+  private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider {
+    const sttProvider = this.getCurrentSttProviderId();
+    const stt: STTProvider = this.instantiateSttProvider(sttProvider, speaker);
+
+    /*
     if (sttProvider === 'deepgram') {
       const apiKey = CredentialsManager.getInstance().getDeepgramApiKey();
       if (apiKey) {
@@ -624,34 +908,34 @@ export class AppState {
 
     stt.setRecognitionLanguage(sttLanguage);
 
+    */
     // Wire Transcript Events
     stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number }) => {
       if (!this.isMeetingActive) {
         return;
       }
 
+      const timestamp = Date.now();
+
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
         text: segment.text,
-        timestamp: Date.now(),
+        timestamp,
         final: segment.isFinal,
         confidence: segment.confidence
       });
 
-      // Feed final transcript to JIT RAG indexer
-      if (segment.isFinal && this.ragManager) {
-        this.ragManager.feedLiveTranscript([{
-          speaker: speaker,
-          text: segment.text,
-          timestamp: Date.now()
-        }]);
+      if (segment.isFinal) {
+        this.queueLiveRagTranscript(speaker, segment.text, timestamp);
       }
+
+      this.recordSttComparisonTranscript(sttProvider, speaker, segment, timestamp);
 
       const helper = this.getWindowHelper();
       const payload = {
         speaker: speaker,
         text: segment.text,
-        timestamp: Date.now(),
+        timestamp,
         final: segment.isFinal,
         confidence: segment.confidence
       };
@@ -661,9 +945,210 @@ export class AppState {
 
     stt.on('error', (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
+      this.recordSttComparisonError(sttProvider, speaker, err.message || String(err));
     });
 
     return stt;
+  }
+
+  private writeToSpeakerPipeline(speaker: CompareSpeaker, chunk: Buffer): void {
+    if (speaker === 'interviewer') {
+      this.googleSTT?.write(chunk);
+    } else {
+      this.googleSTT_User?.write(chunk);
+    }
+
+    if (this.sttCompareRecorder.isActive()) {
+      this.sttCompareRecorder.recordAudioChunk(speaker, chunk.length, Date.now());
+      const shadows = this.compareShadowProviders[speaker];
+      shadows.forEach((provider) => provider.write(chunk));
+    }
+  }
+
+  private notifySpeakerSpeechEnded(speaker: CompareSpeaker): void {
+    const timestamp = Date.now();
+
+    if (speaker === 'interviewer') {
+      this.googleSTT?.notifySpeechEnded?.();
+    } else {
+      this.googleSTT_User?.notifySpeechEnded?.();
+    }
+
+    if (this.sttCompareRecorder.isActive()) {
+      this.sttCompareRecorder.markSpeechEnded(speaker, timestamp);
+      this.compareShadowProviders[speaker].forEach((provider) => provider.notifySpeechEnded?.());
+    }
+
+    this.flushPendingLiveRagTranscript(speaker);
+
+    const payload = { speaker, timestamp };
+    const helper = this.getWindowHelper();
+    helper.getLauncherWindow()?.webContents.send('native-audio-speech-ended', payload);
+    helper.getOverlayWindow()?.webContents.send('native-audio-speech-ended', payload);
+  }
+
+  private stopCompareShadowProviders(): void {
+    Object.values(this.compareShadowProviders).forEach((providers) => {
+      providers.forEach((provider) => {
+        provider.stop();
+        provider.removeAllListeners();
+      });
+      providers.clear();
+    });
+  }
+
+  private buildCompareProviderDescriptors(): SttCompareProviderDescriptor[] {
+    const credentialsManager = CredentialsManager.getInstance();
+    const currentProvider = this.getCurrentSttProviderId();
+    const configuredProvider = this.getConfiguredSttProviderId();
+    const isFallbackPrimary = currentProvider !== configuredProvider;
+    const descriptors: SttCompareProviderDescriptor[] = [
+      {
+        id: currentProvider,
+        label: isFallbackPrimary
+          ? `Current (${currentProvider}, fallback from ${configuredProvider})`
+          : `Current (${currentProvider})`,
+        kind: 'primary',
+        available: true,
+        reason: isFallbackPrimary
+          ? `Configured provider "${configuredProvider}" is unavailable, so the pipeline is currently using "${currentProvider}".`
+          : undefined,
+      },
+    ];
+
+    descriptors.push({
+      id: 'openai',
+      label: currentProvider === 'openai' ? 'OpenAI (Current)' : 'OpenAI Realtime',
+      kind: currentProvider === 'openai' ? 'primary' : 'shadow',
+      available: Boolean(credentialsManager.getOpenAiSttApiKey()),
+      reason: credentialsManager.getOpenAiSttApiKey() ? undefined : 'No OpenAI STT API key configured',
+    });
+
+    descriptors.push({
+      id: 'alibaba',
+      label: currentProvider === 'alibaba' ? 'Alibaba (Current)' : 'Alibaba Paraformer',
+      kind: currentProvider === 'alibaba' ? 'primary' : 'shadow',
+      available: Boolean(credentialsManager.getAlibabaSttApiKey()),
+      reason: credentialsManager.getAlibabaSttApiKey() ? undefined : 'No Alibaba STT API key configured',
+    });
+
+    return descriptors.filter((descriptor, index, array) =>
+      array.findIndex((candidate) => candidate.id === descriptor.id) === index
+    );
+  }
+
+  private createCompareShadowProvider(
+    providerId: 'openai' | 'alibaba',
+    speaker: CompareSpeaker
+  ): STTProvider | null {
+    const provider = this.instantiateSttProvider(providerId, speaker);
+
+    if (provider instanceof GoogleSTT) {
+      return null;
+    }
+
+    provider.on('transcript', (segment: { text: string; isFinal: boolean; confidence: number }) => {
+      this.recordSttComparisonTranscript(providerId, speaker, segment, Date.now());
+    });
+
+    provider.on('error', (err: Error) => {
+      this.recordSttComparisonError(providerId, speaker, err.message || String(err));
+    });
+
+    return provider;
+  }
+
+  private startCompareShadowProviders(): void {
+    this.stopCompareShadowProviders();
+
+    if (!this.sttCompareRecorder.isActive()) {
+      return;
+    }
+
+    const currentProvider = this.getCurrentSttProviderId();
+    const candidates: Array<'openai' | 'alibaba'> = ['openai', 'alibaba'];
+
+    for (const speaker of ['interviewer', 'user'] as const) {
+      for (const providerId of candidates) {
+        if (providerId === currentProvider) {
+          continue;
+        }
+
+        const provider = this.createCompareShadowProvider(providerId, speaker);
+        if (!provider) {
+          continue;
+        }
+
+        this.compareShadowProviders[speaker].set(providerId, provider);
+
+        if (this.isMeetingActive) {
+          provider.start();
+        }
+      }
+    }
+  }
+
+  private recordSttComparisonTranscript(
+    providerId: string,
+    speaker: CompareSpeaker,
+    segment: { text: string; isFinal: boolean; confidence: number },
+    timestamp: number
+  ): void {
+    if (!this.sttCompareRecorder.isActive()) {
+      return;
+    }
+
+    this.sttCompareRecorder.recordTranscript(providerId, speaker, segment, timestamp);
+    this.broadcastSttCompareUpdate();
+  }
+
+  private recordSttComparisonError(providerId: string, speaker: CompareSpeaker, message: string): void {
+    if (!this.sttCompareRecorder.isActive()) {
+      return;
+    }
+
+    this.sttCompareRecorder.recordError(providerId, speaker, message, Date.now());
+    this.broadcastSttCompareUpdate();
+  }
+
+  private broadcastSttCompareUpdate(): void {
+    this.broadcast('stt-compare-update', this.getSttCompareResults());
+  }
+
+  public startSttCompareSession(): void {
+    const descriptors = this.buildCompareProviderDescriptors();
+    this.sttCompareRecorder.start(
+      this.getCurrentSttProviderId(),
+      descriptors,
+      CredentialsManager.getInstance().getTechnicalGlossaryConfig()
+    );
+    this.startCompareShadowProviders();
+    this.broadcastSttCompareUpdate();
+  }
+
+  public stopSttCompareSession(): void {
+    this.stopCompareShadowProviders();
+    this.sttCompareRecorder.stop();
+    this.broadcastSttCompareUpdate();
+  }
+
+  public refreshSttCompareSession(): void {
+    if (!this.sttCompareRecorder.isActive()) {
+      return;
+    }
+
+    this.sttCompareRecorder.updateProviders(this.getCurrentSttProviderId(), this.buildCompareProviderDescriptors());
+    this.sttCompareRecorder.updateGlossary(CredentialsManager.getInstance().getTechnicalGlossaryConfig());
+    this.startCompareShadowProviders();
+    this.broadcastSttCompareUpdate();
+  }
+
+  public getSttCompareResults() {
+    const results = this.sttCompareRecorder.getResults();
+    return {
+      ...results,
+      providers: this.buildCompareProviderDescriptors(),
+    };
   }
 
   private setupSystemAudioPipeline(): void {
@@ -676,10 +1161,10 @@ export class AppState {
         this.systemAudioCapture = new SystemAudioCapture();
         // Wire Capture -> STT
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
-          this.googleSTT?.write(chunk);
+          this.writeToSpeakerPipeline('interviewer', chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
+          this.notifySpeakerSpeechEnded('interviewer');
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture Error:', err);
@@ -689,10 +1174,10 @@ export class AppState {
       if (!this.microphoneCapture) {
         this.microphoneCapture = new MicrophoneCapture();
         this.microphoneCapture.on('data', (chunk: Buffer) => {
-          this.googleSTT_User?.write(chunk);
+          this.writeToSpeakerPipeline('user', chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.googleSTT_User?.notifySpeechEnded?.();
+          this.notifySpeakerSpeechEnded('user');
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture Error:', err);
@@ -747,11 +1232,10 @@ export class AppState {
       this.googleSTT?.setSampleRate(rate);
 
       this.systemAudioCapture.on('data', (chunk: Buffer) => {
-        // console.log('[Main] SysAudio chunk', chunk.length);
-        this.googleSTT?.write(chunk);
+        this.writeToSpeakerPipeline('interviewer', chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
-        this.googleSTT?.notifySpeechEnded?.();
+        this.notifySpeakerSpeechEnded('interviewer');
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         console.error('[Main] SystemAudioCapture Error:', err);
@@ -766,10 +1250,10 @@ export class AppState {
         this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
-          this.googleSTT?.write(chunk);
+          this.writeToSpeakerPipeline('interviewer', chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
+          this.notifySpeakerSpeechEnded('interviewer');
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture (Default) Error:', err);
@@ -793,11 +1277,10 @@ export class AppState {
       this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
-        // console.log('[Main] Mic chunk', chunk.length);
-        this.googleSTT_User?.write(chunk);
+        this.writeToSpeakerPipeline('user', chunk);
       });
       this.microphoneCapture.on('speech_ended', () => {
-        this.googleSTT_User?.notifySpeechEnded?.();
+        this.notifySpeakerSpeechEnded('user');
       });
       this.microphoneCapture.on('error', (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
@@ -812,10 +1295,10 @@ export class AppState {
         this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
-          this.googleSTT_User?.write(chunk);
+          this.writeToSpeakerPipeline('user', chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.googleSTT_User?.notifySpeechEnded?.();
+          this.notifySpeakerSpeechEnded('user');
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture (Default) Error:', err);
@@ -824,6 +1307,8 @@ export class AppState {
         console.error('[Main] Failed to initialize MicrophoneCapture (Default):', err2);
       }
     }
+
+    this.refreshSttCompareSession();
   }
 
   /**
@@ -853,6 +1338,8 @@ export class AppState {
       this.googleSTT?.start();
       this.googleSTT_User?.start();
     }
+
+    this.refreshSttCompareSession();
 
     console.log('[Main] STT Provider reconfigured');
   }
@@ -917,6 +1404,8 @@ export class AppState {
     console.log('[Main] Starting Meeting...', metadata);
 
     this.isMeetingActive = true;
+    this.pendingLiveRagTranscript.interviewer = null;
+    this.pendingLiveRagTranscript.user = null;
     if (metadata) {
       this.intelligenceManager.setMeetingMetadata(metadata);
     }
@@ -947,6 +1436,10 @@ export class AppState {
         this.microphoneCapture?.start();
         this.googleSTT_User?.start();
 
+        if (this.sttCompareRecorder.isActive()) {
+          this.startCompareShadowProviders();
+        }
+
         // Start JIT RAG live indexing
         if (this.ragManager) {
           this.ragManager.startLiveIndexing('live-meeting-current');
@@ -965,6 +1458,9 @@ export class AppState {
     console.log('[Main] Ending Meeting...');
     this.isMeetingActive = false; // Block new data immediately
 
+    this.flushPendingLiveRagTranscript('interviewer');
+    this.flushPendingLiveRagTranscript('user');
+
     // 3. Stop System Audio
     this.systemAudioCapture?.stop();
     this.googleSTT?.stop();
@@ -972,6 +1468,11 @@ export class AppState {
     // 4. Stop Microphone
     this.microphoneCapture?.stop();
     this.googleSTT_User?.stop();
+    this.stopCompareShadowProviders();
+    if (this.sttCompareRecorder.isActive()) {
+      this.sttCompareRecorder.stop();
+      this.broadcastSttCompareUpdate();
+    }
 
     // 4b. Stop JIT RAG live indexing (flush remaining segments)
     if (this.ragManager) {
@@ -1173,7 +1674,95 @@ export class AppState {
     CredentialsManager.getInstance().setSttLanguage(key);
     this.googleSTT?.setRecognitionLanguage(key);
     this.googleSTT_User?.setRecognitionLanguage(key);
+    this.compareShadowProviders.interviewer.forEach((provider) => provider.setRecognitionLanguage(key));
+    this.compareShadowProviders.user.forEach((provider) => provider.setRecognitionLanguage(key));
     this.processingHelper.getLLMHelper().setSttLanguage(key);
+    this.refreshSttCompareSession();
+  }
+
+  public setTechnicalGlossaryConfig(config: TechnicalGlossaryConfig): void {
+    CredentialsManager.getInstance().setTechnicalGlossaryConfig(config);
+    this.googleSTT?.setTechnicalGlossaryConfig?.(config);
+    this.googleSTT_User?.setTechnicalGlossaryConfig?.(config);
+    this.compareShadowProviders.interviewer.forEach((provider) => provider.setTechnicalGlossaryConfig?.(config));
+    this.compareShadowProviders.user.forEach((provider) => provider.setTechnicalGlossaryConfig?.(config));
+    this.refreshSttCompareSession();
+  }
+
+  public async exportSttBenchmarkReport(): Promise<{ success: boolean; jsonPath?: string; markdownPath?: string; error?: string }> {
+    try {
+      const results = this.getSttCompareResults();
+      const report = buildSttBenchmarkReport(results);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const baseName = `natively-stt-benchmark-${timestamp}`;
+      const documentsDir = app.getPath('documents');
+      const jsonPath = path.join(documentsDir, `${baseName}.json`);
+      const markdownPath = path.join(documentsDir, `${baseName}.md`);
+
+      const markdown = [
+        '# STT Benchmark Report',
+        '',
+        `- Generated: ${report.generatedAt}`,
+        `- Mode: ${report.mode}`,
+        `- Active: ${results.active ? 'yes' : 'no'}`,
+        `- Primary provider: ${report.primaryProviderId || 'unknown'}`,
+        `- Total utterances: ${report.totalUtterances}`,
+        `- Glossary terms: ${report.glossaryTerms.join(', ') || 'none'}`,
+        '',
+        '## Provider Summary',
+        '',
+        ...Object.values(report.metrics).map((provider) => [
+          `### ${provider.label}`,
+          `- Utterances seen: ${provider.totalUtterances}`,
+          `- Utterances with final text: ${provider.utterancesWithFinal}`,
+          `- Final coverage rate: ${provider.finalCoverageRate ?? 'n/a'}`,
+          `- Avg first partial latency (ms): ${provider.avgFirstPartialLatencyMs ?? 'n/a'}`,
+          `- Avg final latency (ms): ${provider.avgFinalLatencyMs ?? 'n/a'}`,
+          `- Error count: ${provider.errorCount}`,
+          `- Failure rate: ${provider.failureRate ?? 'n/a'}`,
+          `- CER: ${provider.cer ?? 'n/a'}`,
+          `- Technical keyword recall: ${provider.technicalKeywordRecall ?? 'n/a'}`,
+          `- Truncation rate: ${provider.truncationRate ?? 'n/a'}`,
+          `- Technical terms hit: ${provider.technicalTerms.join(', ') || 'none'}`,
+          '',
+        ].join('\n')),
+        '## Limitations',
+        '',
+        ...report.limitations.map((line) => `- ${line}`),
+        '',
+        '## Utterances',
+        '',
+        ...results.utterances.map((utterance) => {
+          const providerSections = Object.values(utterance.providerResults).map((provider) => (
+            [
+              `- ${provider.label}:`,
+              `  final="${provider.finalText || provider.partialText || ''}"`,
+              `  first_partial_latency_ms=${provider.firstPartialLatencyMs ?? 'n/a'}`,
+              `  final_latency_ms=${provider.finalLatencyMs ?? 'n/a'}`,
+              `  term_hits=${provider.termHits.join(', ') || 'none'}`,
+              `  errors=${provider.errors.join('; ') || 'none'}`,
+            ].join(' ')
+          ));
+
+          return [
+            `### ${utterance.id}`,
+            `- Speaker: ${utterance.speaker}`,
+            `- Started: ${new Date(utterance.startedAt).toISOString()}`,
+            `- Audio bytes: ${utterance.audioBytes}`,
+            ...providerSections,
+            '',
+          ].join('\n');
+        }),
+      ].join('\n');
+
+      fs.writeFileSync(jsonPath, JSON.stringify({ report, rawResults: results }, null, 2), 'utf-8');
+      fs.writeFileSync(markdownPath, markdown, 'utf-8');
+
+      return { success: true, jsonPath, markdownPath };
+    } catch (error: any) {
+      console.error('[Main] Failed to export STT benchmark report:', error);
+      return { success: false, error: error?.message || 'Failed to export STT benchmark report' };
+    }
   }
 
   public static getInstance(): AppState {
@@ -1285,16 +1874,24 @@ export class AppState {
       "Extra screenshots: ",
       this.screenshotHelper.getExtraScreenshotQueue().length
     )
-    
-    // Send toggle-expand to the currently active window mode's window.
-    // If we use getMainWindow(), it might return the launcher window when the overlay is hidden,
-    // causing the IPC event to go to the wrong React tree and silently fail.
-    const mode = this.windowHelper.getCurrentWindowMode();
-    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayWindow() : this.windowHelper.getLauncherWindow();
 
-    if (targetWindow && !targetWindow.isDestroyed()) {
-      targetWindow.webContents.send('toggle-expand');
+    const mode = this.windowHelper.getCurrentWindowMode();
+    const isVisible = this.windowHelper.isVisible();
+    console.log(`[Main] toggleMainWindow mode=${mode} visible=${isVisible} meetingActive=${this.isMeetingActive}`);
+
+    // During a meeting we always want Ctrl+B / toggle actions to operate on the
+    // overlay window directly instead of depending on renderer-local expand state.
+    if (this.isMeetingActive || mode === 'overlay') {
+      if (isVisible) {
+        this.windowHelper.hideMainWindow();
+      } else {
+        this.windowHelper.switchToOverlay();
+      }
+      console.log('[Main] overlay window state after toggle:', JSON.stringify(this.windowHelper.getOverlayWindowState()));
+      return;
     }
+
+    this.windowHelper.toggleMainWindow();
   }
 
   public setWindowDimensions(width: number, height: number): void {

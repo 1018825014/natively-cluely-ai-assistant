@@ -3,7 +3,7 @@
  * Configuration for STT providers (Google gRPC, REST, WebSocket)
  */
 
-export type SttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson';
+export type SttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba';
 
 export interface SttProviderConfig {
     id: SttProviderId;
@@ -112,6 +112,28 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
             Authorization: `Basic ${btoa(`apikey:${apiKey}`)}`,
         }),
         responseContentPath: 'results[0].alternatives[0].transcript',
+    },
+    soniox: {
+        id: 'soniox',
+        name: 'Soniox',
+        description: 'Soniox realtime multi-language speech recognition',
+        endpoint: 'wss://stt-rt.soniox.com/transcribe-websocket',
+        model: 'stt-rt-v4',
+        uploadType: 'websocket',
+        authHeader: () => ({}),
+        responseContentPath: 'tokens',
+    },
+    alibaba: {
+        id: 'alibaba',
+        name: 'Alibaba Paraformer',
+        description: 'DashScope Paraformer realtime recognition via WebSocket',
+        endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
+        model: 'paraformer-realtime-v2',
+        uploadType: 'websocket',
+        authHeader: (apiKey: string) => ({
+            Authorization: `Bearer ${apiKey}`,
+        }),
+        responseContentPath: 'payload.output.sentence.text',
     },
 };
 
