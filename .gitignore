@@ -51,6 +51,7 @@ build/Release
 node_modules/
 jspm_packages/
 dist-electron/
+dist-electron-next/
 dist/
 
 # Snowpack dependency directory (https://snowpack.dev/)

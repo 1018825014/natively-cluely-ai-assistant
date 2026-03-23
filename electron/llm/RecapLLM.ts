@@ -1,5 +1,5 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_RECAP_PROMPT } from "./prompts";
+import { PromptLabService } from "../services/PromptLabService";
 
 export class RecapLLM {
     private llmHelper: LLMHelper;
@@ -14,7 +14,8 @@ export class RecapLLM {
     async generate(context: string): Promise<string> {
         if (!context.trim()) return "";
         try {
-            const stream = this.llmHelper.streamChat(context, undefined, undefined, UNIVERSAL_RECAP_PROMPT);
+            const built = PromptLabService.getInstance().buildRecapExecution({ context }, this.llmHelper);
+            const stream = this.llmHelper.streamChat(context, undefined, undefined, built.systemPrompt);
             let fullResponse = "";
             for await (const chunk of stream) fullResponse += chunk;
             return this.clampRecapResponse(fullResponse);
@@ -30,8 +31,8 @@ export class RecapLLM {
     async *generateStream(context: string): AsyncGenerator<string> {
         if (!context.trim()) return;
         try {
-            // Use our universal helper
-            yield* this.llmHelper.streamChat(context, undefined, undefined, UNIVERSAL_RECAP_PROMPT);
+            const built = PromptLabService.getInstance().buildRecapExecution({ context }, this.llmHelper);
+            yield* this.llmHelper.streamChat(context, undefined, undefined, built.systemPrompt);
         } catch (error) {
             console.error("[RecapLLM] Streaming generation failed:", error);
         }

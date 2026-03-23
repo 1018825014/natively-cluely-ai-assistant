@@ -98,7 +98,7 @@ export class MeetingPersistence {
         try {
             // Generate Title (only if not set by calendar)
             if (!metadata || !metadata.title) {
-                const titlePrompt = `Generate a concise 3-6 word title for this meeting context. Output ONLY the title text. Do not use quotes or conversational filler.`;
+                const titlePrompt = `请为这段会议内容生成一个简洁的 3-6 个词标题。只输出标题文本，不要加引号，也不要加任何口语化前缀。`;
                 const groqTitlePrompt = GROQ_TITLE_PROMPT;
 
                 const generatedTitle = await this.llmHelper.generateMeetingSummary(titlePrompt, data.context.substring(0, 5000), groqTitlePrompt);
@@ -107,20 +107,20 @@ export class MeetingPersistence {
 
             // Generate Structured Summary
             if (data.transcript.length > 2) {
-                const summaryPrompt = `You are a silent meeting summarizer. Convert this conversation into concise internal meeting notes.
+                const summaryPrompt = `你是一名安静的会议总结助手。请把这段对话整理成简洁的内部会议笔记。
     
     RULES:
-    - Do NOT invent information not present in the context
-    - You MAY infer implied action items or next steps if they are logical consequences of the discussion
-    - Do NOT explain or define concepts mentioned
-    - Do NOT use filler phrases like "The meeting covered..." or "Discussed various..."
-    - Do NOT mention transcripts, AI, or summaries
-    - Do NOT sound like an AI assistant
-    - Sound like a senior PM's internal notes
+    - 不要编造上下文里没有的信息
+    - 如果能从讨论中自然推出隐含的行动项或下一步，可以适度补出
+    - 不要解释或定义提到的概念
+    - 不要使用“这场会议主要讨论了……”这类空泛套话
+    - 不要提到 transcript、AI 或 summary 之类字样
+    - 语气不要像 AI 助手
+    - 整体风格像资深 PM 写给自己的内部笔记
     
-    STYLE: Calm, neutral, professional, skim-friendly. Short bullets, no sub-bullets.
+    STYLE: 冷静、中性、专业、便于快速浏览。使用短 bullet，不要出现子 bullet。
     
-    Return ONLY valid JSON (no markdown code blocks):
+    只返回合法 JSON（不要加 markdown 代码块）：
     {
       "overview": "1-2 sentence description of what was discussed",
       "keyPoints": ["3-6 specific bullets - each = one concrete topic or point discussed"],

@@ -961,6 +961,100 @@ export class ModelVersionManager {
 
   // ─── State Persistence ─────────────────────────────────────────────
 
+  private createBaselineFamilyState(baseline: string): FamilyState {
+    const version = parseModelVersion(baseline);
+    return {
+      baseline,
+      tier1: baseline,
+      latest: baseline,
+      latestVersion: version,
+      tier1Version: version,
+      previousTier1: null,
+      previousLatest: null,
+    };
+  }
+
+  private normalizePersistedModelId(
+    family: ModelFamily | TextModelFamily,
+    modelId: unknown,
+    fallback: string
+  ): string {
+    if (typeof modelId !== 'string') return fallback;
+
+    let normalized = modelId.trim();
+    if (!normalized) return fallback;
+
+    if (family === ModelFamily.OPENAI || family === TextModelFamily.OPENAI) {
+      normalized = normalized
+        .replace(/-chat(?:-latest)?$/i, '')
+        .replace(/-latest$/i, '');
+    }
+
+    return normalized || fallback;
+  }
+
+  private normalizeFamilyState(
+    family: ModelFamily | TextModelFamily,
+    rawState: Partial<FamilyState> | undefined,
+    baseline: string
+  ): FamilyState {
+    if (!rawState) {
+      return this.createBaselineFamilyState(baseline);
+    }
+
+    const tier1 = this.normalizePersistedModelId(family, rawState.tier1, baseline);
+    const latest = this.normalizePersistedModelId(family, rawState.latest, tier1);
+    const previousTier1 = rawState.previousTier1
+      ? this.normalizePersistedModelId(family, rawState.previousTier1, baseline)
+      : null;
+    const previousLatest = rawState.previousLatest
+      ? this.normalizePersistedModelId(family, rawState.previousLatest, latest)
+      : null;
+
+    return {
+      baseline,
+      tier1,
+      latest,
+      latestVersion: parseModelVersion(latest) || parseModelVersion(baseline),
+      tier1Version: parseModelVersion(tier1) || parseModelVersion(baseline),
+      previousTier1,
+      previousLatest,
+    };
+  }
+
+  private sanitizeLoadedState(state: PersistedState): { state: PersistedState; changed: boolean } {
+    const normalized: PersistedState = {
+      families: { ...(state.families || {}) },
+      lastDiscoveryTimestamp: typeof state.lastDiscoveryTimestamp === 'number' ? state.lastDiscoveryTimestamp : 0,
+      discoveryFailureCounts: { ...(state.discoveryFailureCounts || {}) },
+      schemaVersion: SCHEMA_VERSION,
+    };
+
+    let changed =
+      normalized.schemaVersion !== state.schemaVersion ||
+      !state.discoveryFailureCounts ||
+      typeof state.lastDiscoveryTimestamp !== 'number';
+
+    const applyFamily = (family: ModelFamily | TextModelFamily, baseline: string) => {
+      const before = normalized.families[family] as Partial<FamilyState> | undefined;
+      const after = this.normalizeFamilyState(family, before, baseline);
+      if (JSON.stringify(before || null) !== JSON.stringify(after)) {
+        changed = true;
+      }
+      normalized.families[family] = after;
+    };
+
+    for (const family of Object.values(ModelFamily)) {
+      applyFamily(family, BASELINE_MODELS[family]);
+    }
+
+    for (const family of Object.values(TextModelFamily)) {
+      applyFamily(family, TEXT_BASELINE_MODELS[family]);
+    }
+
+    return { state: normalized, changed };
+  }
+
   private loadState(): PersistedState {
     try {
       if (fs.existsSync(this.persistPath)) {
@@ -968,8 +1062,14 @@ export class ModelVersionManager {
         const parsed: PersistedState = JSON.parse(raw);
 
         if (parsed.schemaVersion === SCHEMA_VERSION) {
-          console.log('[ModelVersionManager] Loaded persisted state from disk');
-          return parsed;
+          const sanitized = this.sanitizeLoadedState(parsed);
+          if (sanitized.changed) {
+            console.log('[ModelVersionManager] Sanitized persisted state from disk');
+            this.persistState(sanitized.state);
+          } else {
+            console.log('[ModelVersionManager] Loaded persisted state from disk');
+          }
+          return sanitized.state;
         }
 
         // Schema migration: preserve what we can from v1
@@ -985,7 +1085,11 @@ export class ModelVersionManager {
             }
           }
           migrated.lastDiscoveryTimestamp = parsed.lastDiscoveryTimestamp || 0;
-          return migrated;
+          const sanitized = this.sanitizeLoadedState(migrated);
+          if (sanitized.changed) {
+            this.persistState(sanitized.state);
+          }
+          return sanitized.state;
         }
 
         // Schema migration: v2 → v3 (add text families)
@@ -1008,7 +1112,11 @@ export class ModelVersionManager {
             }
           }
           parsed.schemaVersion = SCHEMA_VERSION;
-          return parsed;
+          const sanitized = this.sanitizeLoadedState(parsed);
+          if (sanitized.changed) {
+            this.persistState(sanitized.state);
+          }
+          return sanitized.state;
         }
 
         console.warn('[ModelVersionManager] Unrecognized schema version, reinitializing');
@@ -1020,7 +1128,7 @@ export class ModelVersionManager {
     return this.createDefaultState();
   }
 
-  private persistState() {
+  private persistState(stateOverride: PersistedState = this.state) {
     if (!this.persistPath) return;
     try {
       const dir = path.dirname(this.persistPath);
@@ -1028,7 +1136,7 @@ export class ModelVersionManager {
         fs.mkdirSync(dir, { recursive: true });
       }
       const tmpPath = this.persistPath + '.tmp';
-      fs.writeFileSync(tmpPath, JSON.stringify(this.state, null, 2), 'utf-8');
+      fs.writeFileSync(tmpPath, JSON.stringify(stateOverride, null, 2), 'utf-8');
       fs.renameSync(tmpPath, this.persistPath);
     } catch (e) {
       console.error('[ModelVersionManager] Failed to save state to disk', e);
@@ -1040,32 +1148,12 @@ export class ModelVersionManager {
 
     // Vision families
     for (const family of Object.values(ModelFamily)) {
-      const baseline = BASELINE_MODELS[family];
-      const version = parseModelVersion(baseline);
-      families[family] = {
-        baseline,
-        tier1: baseline,
-        latest: baseline,
-        latestVersion: version,
-        tier1Version: version,
-        previousTier1: null,
-        previousLatest: null,
-      };
+      families[family] = this.createBaselineFamilyState(BASELINE_MODELS[family]);
     }
 
     // Text families
     for (const family of Object.values(TextModelFamily)) {
-      const baseline = TEXT_BASELINE_MODELS[family];
-      const version = parseModelVersion(baseline);
-      families[family] = {
-        baseline,
-        tier1: baseline,
-        latest: baseline,
-        latestVersion: version,
-        tier1Version: version,
-        previousTier1: null,
-        previousLatest: null,
-      };
+      families[family] = this.createBaselineFamilyState(TEXT_BASELINE_MODELS[family]);
     }
 
     return {
@@ -1078,34 +1166,14 @@ export class ModelVersionManager {
 
   private ensureFamilyState(family: ModelFamily): FamilyState {
     if (!this.state.families[family]) {
-      const baseline = BASELINE_MODELS[family];
-      const version = parseModelVersion(baseline);
-      this.state.families[family] = {
-        baseline,
-        tier1: baseline,
-        latest: baseline,
-        latestVersion: version,
-        tier1Version: version,
-        previousTier1: null,
-        previousLatest: null,
-      };
+      this.state.families[family] = this.createBaselineFamilyState(BASELINE_MODELS[family]);
     }
     return this.state.families[family];
   }
 
   private ensureTextFamilyState(family: TextModelFamily): FamilyState {
     if (!this.state.families[family]) {
-      const baseline = TEXT_BASELINE_MODELS[family];
-      const version = parseModelVersion(baseline);
-      this.state.families[family] = {
-        baseline,
-        tier1: baseline,
-        latest: baseline,
-        latestVersion: version,
-        tier1Version: version,
-        previousTier1: null,
-        previousLatest: null,
-      };
+      this.state.families[family] = this.createBaselineFamilyState(TEXT_BASELINE_MODELS[family]);
     }
     return this.state.families[family];
   }

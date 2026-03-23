@@ -1,3 +1,177 @@
+type LlmProviderConfig = {
+  apiKey?: string
+  baseUrl?: string
+  preferredModel?: string
+}
+
+type RecommendationLane = 'primary' | 'strong'
+
+type RecommendationEventMeta = {
+  lane: RecommendationLane
+  requestId: string
+  modelId?: string
+  modelLabel?: string
+}
+
+type LlmRuntimeProvider = "ollama" | "gemini" | "openai" | "alibaba" | "groq" | "claude" | "custom"
+
+type RuntimeLogLevel = "debug" | "info" | "warn" | "error"
+
+type RuntimeLogEntry = {
+  timestamp: string
+  level: RuntimeLogLevel
+  source: string
+  message: string
+  details?: string
+}
+
+type LlmTraceActionType =
+  | "what_to_answer"
+  | "follow_up"
+  | "recap"
+  | "follow_up_questions"
+  | "answer"
+  | "manual_submit"
+  | "image_analysis"
+  | "rag_query_live"
+  | "rag_query_meeting"
+  | "rag_query_global"
+
+type LlmTraceStepRecord = {
+  id: string
+  actionId: string
+  kind: "transport" | "rag" | "app"
+  stage: string
+  lane?: string
+  provider: string
+  model: string
+  method: string
+  url: string
+  requestHeaders: string
+  requestBody: string
+  responseStatus?: number
+  responseHeaders: string
+  responseBody: string
+  durationMs?: number
+  streamed: boolean
+  truncated: boolean
+  error?: string
+  startedAt: string
+  endedAt?: string
+}
+
+type LlmTraceActionRecord = {
+  id: string
+  sessionId: string
+  type: LlmTraceActionType
+  label: string
+  requestId?: string
+  startedAt: string
+  endedAt?: string
+  status: "running" | "completed" | "error"
+  steps: LlmTraceStepRecord[]
+  resolvedInput?: Record<string, unknown>
+  error?: string
+}
+
+type LlmTraceActionContext = {
+  actionId?: string
+  type?: LlmTraceActionType
+  label?: string
+  requestId?: string
+}
+
+type LiveTranscriptSegment = {
+  id: string
+  speaker: 'interviewer' | 'user'
+  text: string
+  timestamp: number
+  updatedAt: number
+  status: 'active' | 'final'
+  edited: boolean
+  lastProviderText: string
+  confidence?: number
+}
+
+type RawInterviewerTranscriptEvent = {
+  id: string
+  text: string
+  timestamp: number
+  final: boolean
+  confidence?: number
+}
+
+type RawInterviewerTranscriptState = {
+  latest: RawInterviewerTranscriptEvent | null
+  fullText: string
+  events: RawInterviewerTranscriptEvent[]
+}
+
+type PromptLabActionId =
+  | 'what_to_answer'
+  | 'follow_up_refine'
+  | 'recap'
+  | 'follow_up_questions'
+  | 'answer'
+
+type PromptLabFieldKind = 'fixed' | 'dynamic' | 'runtime' | 'transcript'
+
+type PromptLabFieldPreview = {
+  key: string
+  label: string
+  kind: PromptLabFieldKind
+  editable: boolean
+  scope: 'fixed' | 'meeting' | 'runtime' | 'transcript'
+  text: string
+  baseText: string
+  charCount: number
+  summaryStart: string
+  summaryEnd: string
+  overrideActive: boolean
+  description?: string
+}
+
+type PromptLabTranscriptSummary = {
+  key: string
+  label: string
+  speaker: 'interviewer' | 'user'
+  turnCount: number
+  charCount: number
+  summaryStart: string
+  summaryEnd: string
+}
+
+type PromptLabActionPreview = {
+  action: PromptLabActionId
+  title: string
+  fixedPromptBase: string
+  fixedPromptResolved: string
+  fixedFields: PromptLabFieldPreview[]
+  dynamicFields: PromptLabFieldPreview[]
+  runtimeFields: PromptLabFieldPreview[]
+  transcriptSummaries: PromptLabTranscriptSummary[]
+  hasUserOverrides: boolean
+  execution: {
+    systemPrompt?: string
+    contextPrompt?: string
+    message?: string
+    imagePaths: string[]
+    runtime: Record<string, unknown>
+  }
+}
+
+type RendererLogPayload = {
+  level?: RuntimeLogLevel
+  type?: string
+  source?: string
+  context?: string
+  message?: string
+  details?: string
+  stack?: string
+  componentStack?: string
+  windowUrl?: string
+}
+
 export interface ElectronAPI {
   getOverlayWindowState: () => Promise<{
     visible: boolean
@@ -6,6 +180,9 @@ export interface ElectronAPI {
     launcherVisible: boolean
     overlayAlwaysOnTop: boolean
     overlayFocused: boolean
+    isMaximized: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+    restorableBounds: { x: number; y: number; width: number; height: number } | null
   }>
   updateContentDimensions: (dimensions: {
     width: number
@@ -17,6 +194,28 @@ export interface ElectronAPI {
     width: number
     height: number
   }) => Promise<{ success: boolean }>
+  maximizeOverlayToWorkArea: () => Promise<{
+    visible: boolean
+    mode: 'launcher' | 'overlay'
+    overlayVisible: boolean
+    launcherVisible: boolean
+    overlayAlwaysOnTop: boolean
+    overlayFocused: boolean
+    isMaximized: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+    restorableBounds: { x: number; y: number; width: number; height: number } | null
+  }>
+  restoreOverlayBounds: () => Promise<{
+    visible: boolean
+    mode: 'launcher' | 'overlay'
+    overlayVisible: boolean
+    launcherVisible: boolean
+    overlayAlwaysOnTop: boolean
+    overlayFocused: boolean
+    isMaximized: boolean
+    bounds: { x: number; y: number; width: number; height: number } | null
+    restorableBounds: { x: number; y: number; width: number; height: number } | null
+  }>
   onToggleExpand: (callback: () => void) => () => void
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
@@ -47,8 +246,31 @@ export interface ElectronAPI {
   moveWindowUp: () => Promise<void>
   moveWindowDown: () => Promise<void>
 
-  analyzeImageFile: (path: string) => Promise<void>
+  analyzeImageFile: (path: string, traceContext?: LlmTraceActionContext) => Promise<void>
   quitApp: () => Promise<void>
+  getRuntimeLogInfo: () => Promise<{ logDirectory: string; currentLogFile: string }>
+  getRuntimeLogEntries: (query?: { limit?: number; levels?: RuntimeLogLevel[] }) => Promise<RuntimeLogEntry[]>
+  openRuntimeLogDirectory: () => Promise<{ success: boolean; error?: string; logDirectory: string; currentLogFile: string }>
+  getLlmTraceInfo: () => Promise<{ logDirectory: string; currentLogFile: string; sessionId: string }>
+  getLlmTraceActions: (query?: { limit?: number; currentSessionOnly?: boolean; actionTypes?: LlmTraceActionType[] }) => Promise<LlmTraceActionRecord[]>
+  openLlmTraceDirectory: () => Promise<{ success: boolean; error?: string; logDirectory: string; currentLogFile: string; sessionId: string }>
+  clearLlmTraceSession: () => Promise<{ success: boolean; sessionId: string }>
+  openTraceWindow: () => Promise<{ success: boolean }>
+  getRawTranscriptState: () => Promise<RawInterviewerTranscriptState>
+  openRawTranscriptWindow: () => Promise<{ success: boolean }>
+  openSttCompareWindow: () => Promise<{ success: boolean }>
+  openPromptLabWindow: (payload?: { action?: PromptLabActionId; context?: any }) => Promise<{ success: boolean }>
+  getPromptLabActionPreview: (action: PromptLabActionId, context?: any) => Promise<PromptLabActionPreview>
+  getPromptLabFixedOverrides: () => Promise<Record<string, any>>
+  setPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => Promise<{ success: boolean }>
+  resetPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => Promise<{ success: boolean }>
+  setPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => Promise<{ success: boolean }>
+  resetPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => Promise<{ success: boolean }>
+  resetPromptLabActionDynamicOverrides: (payload: { action: PromptLabActionId }) => Promise<{ success: boolean }>
+  onRawTranscriptUpdate: (callback: (state: RawInterviewerTranscriptState) => void) => () => void
+  onLlmTraceUpdate: (callback: (data: { kind: "upsert"; action: LlmTraceActionRecord } | { kind: "cleared"; sessionId: string }) => void) => () => void
+  onPromptLabFocusAction: (callback: (action: PromptLabActionId) => void) => () => void
+  logErrorToMain: (payload: RendererLogPayload) => void
   toggleWindow: () => Promise<void>
   showWindow: () => Promise<void>
   hideWindow: () => Promise<void>
@@ -75,19 +297,21 @@ export interface ElectronAPI {
   closeAdvancedSettings: () => Promise<void>
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: LlmRuntimeProvider; model: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', config?: LlmProviderConfig) => Promise<{ success: boolean; error?: string; diagnostics?: string[] }>
   selectServiceAccount: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  setOpenaiProviderConfig: (config: LlmProviderConfig) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasAlibabaKey?: boolean; technicalGlossaryConfig?: any; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string }>
+  setAlibabaLlmProviderConfig: (config: LlmProviderConfig) => Promise<{ success: boolean; error?: string }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasAlibabaLlmKey: boolean; openaiBaseUrl?: string; alibabaLlmBaseUrl?: string; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasAlibabaKey?: boolean; technicalGlossaryConfig?: any; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; alibabaPreferredModel?: string }>
 
   // STT Provider Management
   setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => Promise<{ success: boolean; error?: string }>
@@ -103,7 +327,7 @@ export interface ElectronAPI {
   setSonioxApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setAlibabaSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   getTechnicalGlossary: () => Promise<any>
-  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; error?: string }>
+  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; config?: any; warning?: string; error?: string }>
   testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
   startSttCompareSession: () => Promise<{ success: boolean; error?: string }>
   stopSttCompareSession: () => Promise<{ success: boolean; error?: string }>
@@ -126,6 +350,12 @@ export interface ElectronAPI {
   onNativeAudioSuggestion: (callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void) => () => void
   onNativeAudioConnected: (callback: () => void) => () => void
   onNativeAudioDisconnected: (callback: () => void) => () => void
+  getLiveTranscriptState: () => Promise<LiveTranscriptSegment[]>
+  editLiveTranscriptSegment: (payload: { id: string; text: string }) => Promise<{ success: boolean; segment?: LiveTranscriptSegment; state?: LiveTranscriptSegment[]; error?: string }>
+  mergeLiveTranscriptSegmentWithPrevious: (payload: { id: string }) => Promise<{ success: boolean; state?: LiveTranscriptSegment[]; mergedIntoId?: string; cursorPosition?: number; error?: string }>
+  commitLiveTranscriptSegment: (payload?: { id?: string; speaker?: 'interviewer' | 'user' }) => Promise<{ success: boolean; segment?: LiveTranscriptSegment; state?: LiveTranscriptSegment[]; error?: string }>
+  resyncLiveTranscriptRag: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>
+  onLiveTranscriptUpdate: (callback: (segments: LiveTranscriptSegment[]) => void) => () => void
   onSuggestionGenerated: (callback: (data: { question: string; suggestion: string; confidence: number }) => void) => () => void
   onSuggestionProcessingStart: (callback: () => void) => () => void
   onSuggestionError: (callback: (error: { error: string }) => void) => () => void
@@ -142,8 +372,8 @@ export interface ElectronAPI {
 
   // Intelligence Mode IPC
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => Promise<{ answer: string | null; question?: string; error?: string }>
-  generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
+  generateWhatToSay: (question?: string, imagePaths?: string[], requestId?: string) => Promise<{ answer: string | null; question?: string; error?: string }>
+  generateFollowUp: (intent: string, userRequest?: string, source?: { lane?: RecommendationLane; answer?: string; requestId?: string }) => Promise<{ refined: string | null; intent: string }>
   generateFollowUpQuestions: () => Promise<{ questions: string | null }>
   generateRecap: () => Promise<{ summary: string | null }>
   submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>
@@ -163,10 +393,11 @@ export interface ElectronAPI {
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
-  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
+  onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number } & RecommendationEventMeta) => void) => () => void
+  onIntelligenceSuggestedAnswerStatus: (callback: (data: { status: 'started' | 'completed' | 'skipped' | 'error'; question: string; confidence: number; message?: string } & RecommendationEventMeta) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number } & RecommendationEventMeta) => void) => () => void
+  onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string } & RecommendationEventMeta) => void) => () => void
+  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string } & RecommendationEventMeta) => void) => () => void
   onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsToken: (callback: (data: { token: string }) => void) => () => void
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
@@ -179,7 +410,7 @@ export interface ElectronAPI {
   onSessionReset: (callback: () => void) => () => void;
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean; traceContext?: LlmTraceActionContext }) => Promise<void>
   onGeminiStreamToken: (callback: (token: string) => void) => () => void
   onGeminiStreamDone: (callback: () => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void;
@@ -270,9 +501,9 @@ export interface ElectronAPI {
   testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
 
   // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryMeeting: (meetingId: string, query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryLive: (query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryGlobal: (query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<{ success: boolean }>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
@@ -322,8 +553,8 @@ export interface ElectronAPI {
   setGoogleSearchCseId: (cseId: string) => Promise<{ success: boolean; error?: string }>
 
   // Dynamic Model Discovery
-  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => Promise<{ success: boolean; models?: {id: string, label: string}[]; error?: string }>
-  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => Promise<void>
+  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', config: LlmProviderConfig) => Promise<{ success: boolean; models?: {id: string, label: string}[]; error?: string }>
+  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', modelId: string) => Promise<void>
 
   // License Management
   licenseActivate: (key: string) => Promise<{ success: boolean; error?: string }>

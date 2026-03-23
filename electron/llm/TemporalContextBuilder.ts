@@ -202,8 +202,8 @@ export function formatTemporalContextForPrompt(ctx: TemporalContext): string {
     // Add role context
     if (ctx.roleContext !== 'general') {
         const roleDesc = ctx.roleContext === 'responding_to_interviewer'
-            ? 'You are responding to the interviewer\'s question.'
-            : 'You are helping the user formulate their response.';
+            ? '你正在回应面试官刚才的问题。'
+            : '你正在帮助用户组织接下来要说的回答。';
         parts.push(`<role_context>${roleDesc}</role_context>`);
     }
 

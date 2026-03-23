@@ -115,21 +115,6 @@ const SettingsPopup = () => {
         }
     }, [useGroqFastText]);
 
-    const [showTranscript, setShowTranscript] = useState(() => {
-        const stored = localStorage.getItem('natively_interviewer_transcript');
-        return stored !== 'false'; // Default to true if not set
-    });
-
-    useEffect(() => {
-        const handleStorage = () => {
-            const stored = localStorage.getItem('natively_interviewer_transcript');
-            setShowTranscript(stored !== 'false');
-        };
-
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, []);
-
     const contentRef = useRef<HTMLDivElement>(null);
 
     // Auto-resize Window
@@ -186,7 +171,7 @@ const SettingsPopup = () => {
 
 
                 {/* Groq (Fast Text) Toggle */}
-                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "需要先在设置中配置 Groq API Key" : ""}>
+                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "需要先在设置中配置 Groq API 密钥" : ""}>
                     <div className="flex items-center gap-3">
                         <Zap
                             className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
@@ -203,29 +188,6 @@ const SettingsPopup = () => {
                         disabled={hasStoredKey.groq === false}
                     >
                         <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${useGroqFastText ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                    </button>
-                </div>
-
-                {/* Interviewer Transcript Toggle */}
-                <div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group cursor-default">
-                    <div className="flex items-center gap-3">
-                        <MessageSquare
-                            className={`w-3.5 h-3.5 transition-colors ${showTranscript ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'}`}
-                            fill={showTranscript ? "currentColor" : "none"}
-                        />
-                        <span className={`text-[12px] font-medium transition-colors ${showTranscript ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>转录</span>
-                    </div>
-                    <button
-                        onClick={() => {
-                            const newState = !showTranscript;
-                            setShowTranscript(newState);
-                            localStorage.setItem('natively_interviewer_transcript', String(newState));
-                            // Dispatch event for same-window listeners
-                            window.dispatchEvent(new Event('storage'));
-                        }}
-                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${showTranscript ? 'bg-emerald-500 shadow-[0_2px_10px_rgba(16,185,129,0.3)]' : 'bg-white/10'}`}
-                    >
-                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${showTranscript ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                     </button>
                 </div>
 
@@ -263,7 +225,7 @@ const SettingsPopup = () => {
                 <div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group interaction-base interaction-press">
                     <div className="flex items-center gap-3">
                         <MessageSquare className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition-colors" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">显示/隐藏</span>
+                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 transition-colors">显示/隐藏/置前</span>
                     </div>
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         {/* Dynamic Keys for Toggle Visibility */}

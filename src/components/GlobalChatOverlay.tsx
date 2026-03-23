@@ -230,7 +230,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
                 console.error('[GlobalChat] RAG stream error:', data.error);
                 setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                setErrorMessage("Couldn't get a response. Please try again.");
+                setErrorMessage("暂时没拿到回复，请再试一次。");
                 setChatState('error');
                 streamBuffer.reset();
                 tokenCleanup?.();
@@ -278,7 +278,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
                     console.error('[GlobalChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                    setErrorMessage("Couldn't get a response. Please check your settings.");
+                    setErrorMessage("暂时没拿到回复，请检查设置后再试。");
                     setChatState('error');
                     streamBuffer.reset();
                     oldTokenCleanup?.();
@@ -293,7 +293,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         } catch (error) {
             console.error('[GlobalChat] Error:', error);
             setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-            setErrorMessage("Something went wrong. Please try again.");
+            setErrorMessage("出了点问题，请稍后再试。");
             setChatState('error');
         }
     }, [chatState]);

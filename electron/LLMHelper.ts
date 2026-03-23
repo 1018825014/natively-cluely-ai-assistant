@@ -19,6 +19,18 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
+import {
+  CloudProviderId,
+  DEFAULT_ALIBABA_BASE_URL,
+  DEFAULT_OPENAI_BASE_URL,
+  detectCloudProviderFromModel,
+  getDefaultProviderModel,
+  OpenAICompatibleProviderConfig,
+  OpenAICompatibleProviderId,
+  ProviderCapabilities,
+} from './services/LlmProviderProfiles';
+import { createOpenAICompatibleClient } from './services/OpenAICompatibleResponses';
+import { llmTraceRecorder } from './services/LlmTraceRecorder';
 const execAsync = promisify(exec);
 
 interface OllamaResponse {
@@ -26,11 +38,34 @@ interface OllamaResponse {
   done: boolean
 }
 
+interface InternalTextFallbackOptions {
+  applyLanguageInstruction?: boolean;
+  groqSystemPrompt?: string;
+  timeoutMs?: number;
+  maxRotations?: number;
+  skipGroqAboveTokens?: number;
+}
+
+export interface StreamChatRouteInfo {
+  provider: "ollama" | CloudProviderId | "custom";
+  modelId: string;
+  modelLabel: string;
+  isFastPath: boolean;
+}
+
+export interface StreamChatRouteOptions {
+  disableFastPath?: boolean;
+  onRouteSelected?: (route: StreamChatRouteInfo) => void;
+}
+
 // Model constant for Gemini 3 Flash
 const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview"
 const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
 const OPENAI_MODEL = "gpt-5.4"
+const OPENAI_FAST_MODEL = "gpt-5.4-mini"
+const ALIBABA_MODEL = "qwen3.5-plus"
+const ALIBABA_FAST_MODEL = "qwen3.5-flash"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
 const MAX_OUTPUT_TOKENS = 65536
 const CLAUDE_MAX_OUTPUT_TOKENS = 64000
@@ -42,11 +77,23 @@ export class LLMHelper {
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
+  private alibabaClient: OpenAI | null = null
   private claudeClient: Anthropic | null = null
   private apiKey: string | null = null
   private groqApiKey: string | null = null
   private openaiApiKey: string | null = null
+  private alibabaApiKey: string | null = null
   private claudeApiKey: string | null = null
+  private openaiBaseUrl: string = DEFAULT_OPENAI_BASE_URL
+  private alibabaBaseUrl: string = DEFAULT_ALIBABA_BASE_URL
+  private openaiPreferredModel: string = OPENAI_MODEL
+  private openaiFastModel: string = OPENAI_FAST_MODEL
+  private alibabaPreferredModel: string = ALIBABA_MODEL
+  private alibabaFastModel: string = ALIBABA_FAST_MODEL
+  private providerCapabilities: Partial<Record<OpenAICompatibleProviderId, ProviderCapabilities | null>> = {
+    openai: null,
+    alibaba: null,
+  }
   private useOllama: boolean = false
   private ollamaModel: string = "llama3.2"
   private ollamaUrl: string = "http://localhost:11434"
@@ -64,6 +111,7 @@ export class LLMHelper {
 
   // Self-improving model version manager for vision analysis
   private modelVersionManager: ModelVersionManager;
+  private currentProviderId: CloudProviderId = 'gemini';
 
   constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string) {
     this.useOllama = useOllama
@@ -83,8 +131,7 @@ export class LLMHelper {
 
     // Initialize OpenAI client if API key provided
     if (openaiApiKey) {
-      this.openaiApiKey = openaiApiKey
-      this.openaiClient = new OpenAI({ apiKey: openaiApiKey })
+      this.setOpenAICompatibleProviderConfig('openai', { apiKey: openaiApiKey })
       console.log(`[LLMHelper] OpenAI client initialized with model: ${OPENAI_MODEL}`)
     }
 
@@ -125,14 +172,49 @@ export class LLMHelper {
   }
 
   public setGroqApiKey(apiKey: string) {
+    this.groqApiKey = apiKey;
     this.groqClient = new Groq({ apiKey });
     console.log("[LLMHelper] Groq API Key updated.");
   }
 
   public setOpenaiApiKey(apiKey: string) {
-    this.openaiApiKey = apiKey;
-    this.openaiClient = new OpenAI({ apiKey });
+    this.setOpenAICompatibleProviderConfig('openai', { apiKey });
     console.log("[LLMHelper] OpenAI API Key updated.");
+  }
+
+  public setOpenAICompatibleProviderConfig(provider: OpenAICompatibleProviderId, config: OpenAICompatibleProviderConfig) {
+    const normalizedConfig = {
+      preferredModel: getDefaultProviderModel(provider),
+      fastModel: getDefaultProviderModel(provider, 'fast'),
+      ...config,
+    };
+
+    if (provider === 'openai') {
+      if (normalizedConfig.apiKey !== undefined) this.openaiApiKey = normalizedConfig.apiKey || null;
+      if (normalizedConfig.baseUrl) this.openaiBaseUrl = normalizedConfig.baseUrl;
+      if (normalizedConfig.preferredModel) this.openaiPreferredModel = normalizedConfig.preferredModel;
+      if (normalizedConfig.fastModel) this.openaiFastModel = normalizedConfig.fastModel;
+      this.openaiClient = createOpenAICompatibleClient('openai', {
+        apiKey: this.openaiApiKey || undefined,
+        baseUrl: this.openaiBaseUrl,
+      });
+      this.providerCapabilities.openai = null;
+      return;
+    }
+
+    if (normalizedConfig.apiKey !== undefined) this.alibabaApiKey = normalizedConfig.apiKey || null;
+    if (normalizedConfig.baseUrl) this.alibabaBaseUrl = normalizedConfig.baseUrl;
+    if (normalizedConfig.preferredModel) this.alibabaPreferredModel = normalizedConfig.preferredModel;
+    if (normalizedConfig.fastModel) this.alibabaFastModel = normalizedConfig.fastModel;
+    this.alibabaClient = createOpenAICompatibleClient('alibaba', {
+      apiKey: this.alibabaApiKey || undefined,
+      baseUrl: this.alibabaBaseUrl,
+    });
+    this.providerCapabilities.alibaba = null;
+  }
+
+  public setProviderCapabilities(provider: OpenAICompatibleProviderId, capabilities: ProviderCapabilities | null) {
+    this.providerCapabilities[provider] = capabilities;
   }
 
   public setClaudeApiKey(apiKey: string) {
@@ -148,7 +230,7 @@ export class LLMHelper {
    */
   public async initModelVersionManager(): Promise<void> {
     this.modelVersionManager.setApiKeys({
-      openai: this.openaiApiKey,
+      openai: this.openaiBaseUrl === DEFAULT_OPENAI_BASE_URL ? this.openaiApiKey : null,
       gemini: this.apiKey,
       claude: this.claudeApiKey,
       groq: this.groqApiKey,
@@ -165,10 +247,12 @@ export class LLMHelper {
     this.apiKey = null;
     this.groqApiKey = null;
     this.openaiApiKey = null;
+    this.alibabaApiKey = null;
     this.claudeApiKey = null;
     this.client = null;
     this.groqClient = null;
     this.openaiClient = null;
+    this.alibabaClient = null;
     this.claudeClient = null;
     // Destroy rate limiters
     if (this.rateLimiters) {
@@ -197,6 +281,10 @@ export class LLMHelper {
     return modelId.startsWith("gpt-") || modelId.startsWith("o1-") || modelId.startsWith("o3-") || modelId.includes("openai");
   }
 
+  private isAlibabaModel(modelId: string): boolean {
+    return modelId.toLowerCase().includes("qwen");
+  }
+
   private isClaudeModel(modelId: string): boolean {
     return modelId.startsWith("claude-");
   }
@@ -211,6 +299,173 @@ export class LLMHelper {
   // ---------------------------
 
   private currentModelId: string = GEMINI_FLASH_MODEL;
+
+  private formatModelLabel(modelId: string): string {
+    if (!modelId) return '';
+    return modelId.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  }
+
+  private createRouteInfo(
+    provider: "ollama" | CloudProviderId | "custom",
+    modelId: string,
+    isFastPath: boolean
+  ): StreamChatRouteInfo {
+    return {
+      provider,
+      modelId,
+      modelLabel: this.formatModelLabel(modelId),
+      isFastPath,
+    };
+  }
+
+  public getCurrentModelRouteInfo(): StreamChatRouteInfo {
+    if (this.activeCurlProvider) {
+      return this.createRouteInfo("custom", this.activeCurlProvider.id, false);
+    }
+    if (this.customProvider) {
+      return this.createRouteInfo("custom", this.customProvider.id, false);
+    }
+    if (this.useOllama) {
+      return this.createRouteInfo("ollama", this.ollamaModel, false);
+    }
+
+    return this.createRouteInfo(this.currentProviderId, this.currentModelId, false);
+  }
+
+  public getPreferredFastTextRouteInfo(): StreamChatRouteInfo | null {
+    if (this.openaiClient) {
+      return this.createRouteInfo("openai", this.openaiFastModel, true);
+    }
+    if (this.alibabaClient) {
+      return this.createRouteInfo("alibaba", this.alibabaFastModel, true);
+    }
+    if (this.groqClient) {
+      return this.createRouteInfo("groq", GROQ_MODEL, true);
+    }
+    return null;
+  }
+
+  public getInitialStreamChatRouteInfo(
+    imagePaths?: string[],
+    options: StreamChatRouteOptions = {}
+  ): StreamChatRouteInfo | null {
+    const isMultimodal = !!(imagePaths?.length);
+    if (!options.disableFastPath && this.groqFastTextMode && !isMultimodal) {
+      return this.getPreferredFastTextRouteInfo() || this.getCurrentModelRouteInfo();
+    }
+    return this.getCurrentModelRouteInfo();
+  }
+
+  public shouldSkipParallelStrongAnswer(imagePaths?: string[]): boolean {
+    const strongRoute = this.getCurrentModelRouteInfo();
+    const primaryRoute = this.getInitialStreamChatRouteInfo(imagePaths);
+
+    if (!primaryRoute) {
+      return true;
+    }
+
+    return primaryRoute.provider === strongRoute.provider && primaryRoute.modelId === strongRoute.modelId;
+  }
+
+  private getOpenAICompatibleClient(provider: OpenAICompatibleProviderId): OpenAI | null {
+    return provider === 'openai' ? this.openaiClient : this.alibabaClient;
+  }
+
+  private getPreferredOpenAICompatibleModel(
+    provider: OpenAICompatibleProviderId,
+    options: { useFast?: boolean; explicitModel?: string } = {}
+  ): string {
+    if (options.explicitModel) return options.explicitModel;
+    if (provider === 'openai') {
+      return options.useFast ? this.openaiFastModel : this.openaiPreferredModel;
+    }
+    return options.useFast ? this.alibabaFastModel : this.alibabaPreferredModel;
+  }
+
+  private async buildResponsesInput(userMessage: string, imagePaths?: string[]): Promise<any[]> {
+    const content: any[] = [{ type: 'input_text', text: userMessage }];
+
+    for (const imagePath of imagePaths || []) {
+      if (!fs.existsSync(imagePath)) continue;
+      const imageData = await fs.promises.readFile(imagePath);
+      content.push({
+        type: 'input_image',
+        image_url: `data:image/png;base64,${imageData.toString("base64")}`,
+      });
+    }
+
+    return [{ role: 'user', content }];
+  }
+
+  private extractResponsesOutputText(response: any): string {
+    if (typeof response?.output_text === 'string' && response.output_text.trim()) {
+      return response.output_text;
+    }
+
+    const outputItems = response?.output || [];
+    for (const item of outputItems) {
+      if (!Array.isArray(item?.content)) continue;
+      for (const part of item.content) {
+        if (typeof part?.text === 'string' && part.text.trim()) {
+          return part.text;
+        }
+      }
+    }
+
+    return "";
+  }
+
+  private async generateWithOpenAICompatible(
+    provider: OpenAICompatibleProviderId,
+    userMessage: string,
+    systemPrompt?: string,
+    imagePaths?: string[],
+    modelOverride?: string
+  ): Promise<string> {
+    const client = this.getOpenAICompatibleClient(provider);
+    if (!client) throw new Error(`${provider} client not initialized`);
+
+    await this.rateLimiters.openai.acquire();
+
+    const response = await client.responses.create({
+      model: this.getPreferredOpenAICompatibleModel(provider, { explicitModel: modelOverride }),
+      ...(systemPrompt ? { instructions: systemPrompt } : {}),
+      input: await this.buildResponsesInput(userMessage, imagePaths),
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+    });
+
+    return this.extractResponsesOutputText(response);
+  }
+
+  private async * streamWithOpenAICompatible(
+    provider: OpenAICompatibleProviderId,
+    userMessage: string,
+    imagePaths?: string[],
+    systemPrompt?: string,
+    modelOverride?: string
+  ): AsyncGenerator<string, void, unknown> {
+    const client = this.getOpenAICompatibleClient(provider);
+    if (!client) throw new Error(`${provider} client not initialized`);
+
+    await this.rateLimiters.openai.acquire();
+
+    const stream = await client.responses.create({
+      model: this.getPreferredOpenAICompatibleModel(provider, { explicitModel: modelOverride }),
+      ...(systemPrompt ? { instructions: systemPrompt } : {}),
+      input: await this.buildResponsesInput(userMessage, imagePaths),
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      stream: true,
+    });
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        yield event.delta;
+      }
+      if (event.type === 'response.completed') {
+        return;
+      }
+    }
+  }
 
   public setModel(modelId: string, customProviders: (CustomProvider | CurlProvider)[] = []) {
     // Map UI short codes to internal Model IDs
@@ -236,6 +491,7 @@ export class LLMHelper {
       this.customProvider = null;
       // Treat text-only custom providers as CurlProviders (responsePath optional)
       this.activeCurlProvider = custom as CurlProvider;
+      this.currentProviderId = 'gemini';
       console.log(`[LLMHelper] Switched to cURL Provider: ${custom.name}`);
       return;
     }
@@ -244,6 +500,8 @@ export class LLMHelper {
     this.useOllama = false;
     this.customProvider = null;
     this.currentModelId = targetModelId;
+    this.activeCurlProvider = null;
+    this.currentProviderId = detectCloudProviderFromModel(targetModelId) || 'gemini';
 
     // Update specific model props if needed
     if (targetModelId === GEMINI_PRO_MODEL) this.geminiModel = GEMINI_PRO_MODEL;
@@ -395,7 +653,12 @@ export class LLMHelper {
       "I'm not sure",
       "It depends",
       "I can't answer",
-      "I don't know"
+      "I don't know",
+      "我不太确定",
+      "这要看情况",
+      "我没法回答",
+      "我不知道",
+      "抱歉，这部分信息不能提供"
     ];
 
     if (fallbackPhrases.some(phrase => clean.toLowerCase().includes(phrase.toLowerCase()))) {
@@ -505,12 +768,12 @@ export class LLMHelper {
 
   public async extractProblemFromImages(imagePaths: string[]) {
     try {
-      const prompt = `You are a wingman. Please analyze these images and extract the following information in JSON format:\n{
+      const prompt = `你是一名辅助分析助手。请结合这些图片内容，提取以下信息，并按 JSON 格式返回：\n{
   "problem_statement": "A clear statement of the problem or situation depicted in the images.",
   "context": "Relevant background or context from the images.",
   "suggested_responses": ["First possible answer or action", "Second possible answer or action", "..."],
   "reasoning": "Explanation of why these suggestions are appropriate."
-}\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
+}\n重要：只返回 JSON 对象本身，不要带 markdown 格式或代码块。`
 
       const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, imagePaths)
       return JSON.parse(this.cleanJsonResponse(text))
@@ -521,7 +784,7 @@ export class LLMHelper {
   }
 
   public async generateSolution(problemInfo: any) {
-    const prompt = `Given this problem or situation:\n${JSON.stringify(problemInfo, null, 2)}\n\nPlease provide your response in the following JSON format:\n{
+    const prompt = `已知下面这个问题或场景：\n${JSON.stringify(problemInfo, null, 2)}\n\n请按以下 JSON 格式给出结果：\n{
   "solution": {
     "code": "The code or main answer here.",
     "problem_statement": "Restate the problem or situation.",
@@ -529,7 +792,7 @@ export class LLMHelper {
     "suggested_responses": ["First possible answer or action", "Second possible answer or action", "..."],
     "reasoning": "Explanation of why these suggestions are appropriate."
   }
-}\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
+}\n重要：只返回 JSON 对象本身，不要带 markdown 格式或代码块。`
 
     try {
       const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt)
@@ -542,7 +805,7 @@ export class LLMHelper {
 
   public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[]) {
     try {
-      const prompt = `You are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
+      const prompt = `你是一名辅助分析助手。已知：\n1. 原始问题或场景：${JSON.stringify(problemInfo, null, 2)}\n2. 当前的回答或处理方式：${currentCode}\n3. 图片中提供的调试信息\n\n请分析这些调试信息，并按以下 JSON 格式给出反馈：\n{
   "solution": {
     "code": "The code or main answer here.",
     "problem_statement": "Restate the problem or situation.",
@@ -550,7 +813,7 @@ export class LLMHelper {
     "suggested_responses": ["First possible answer or action", "Second possible answer or action", "..."],
     "reasoning": "Explanation of why these suggestions are appropriate."
   }
-}\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
+}\n重要：只返回 JSON 对象本身，不要带 markdown 格式或代码块。`
 
       const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, debugImagePaths)
       const parsed = JSON.parse(this.cleanJsonResponse(text))
@@ -601,6 +864,12 @@ export class LLMHelper {
   public async analyzeImageFiles(imagePaths: string[]) {
     try {
       const prompt = `Describe the content of ${imagePaths.length > 1 ? 'these images' : 'this image'} in a short, concise answer. If it contains code or a problem, solve it.`;
+      llmTraceRecorder.updateResolvedInput({
+        message: prompt,
+        context: "",
+        systemPrompt: HARD_SYSTEM_PROMPT,
+        imagePaths,
+      });
       const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths);
 
       return { text: text, timestamp: Date.now() };
@@ -614,50 +883,158 @@ export class LLMHelper {
     }
   }
 
+  private async generateWithInternalTextFallback(
+    systemPrompt: string,
+    userPrompt: string,
+    options: InternalTextFallbackOptions = {}
+  ): Promise<string> {
+    type ProviderAttempt = { name: string; execute: () => Promise<string> };
+
+    const finalSystemPrompt = options.applyLanguageInstruction
+      ? this.injectLanguageInstruction(systemPrompt)
+      : systemPrompt;
+    const finalGroqSystemPrompt = options.groqSystemPrompt
+      ? (options.applyLanguageInstruction
+        ? this.injectLanguageInstruction(options.groqSystemPrompt)
+        : options.groqSystemPrompt)
+      : finalSystemPrompt;
+    const timeoutMs = options.timeoutMs ?? 45000;
+    const maxRotations = options.maxRotations ?? 3;
+    const tokenEstimate = Math.ceil(userPrompt.length / 4);
+
+    const combinedGeminiPrompt = `${finalSystemPrompt}\n\n${userPrompt}`;
+    const combinedGroqPrompt = `${finalGroqSystemPrompt}\n\n${userPrompt}`;
+    const openaiModel = this.openaiPreferredModel || this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+    const alibabaModel = this.alibabaPreferredModel || ALIBABA_MODEL;
+    const geminiFlashModel = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_FLASH).tier1;
+    const geminiProModel = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_PRO).tier1;
+    const claudeModel = this.modelVersionManager.getTextTieredModels(TextModelFamily.CLAUDE).tier1;
+    const groqModel = this.modelVersionManager.getTextTieredModels(TextModelFamily.GROQ).tier1;
+
+    const providers: ProviderAttempt[] = [];
+
+    if (this.openaiClient) {
+      providers.push({
+        name: `OpenAI (${openaiModel})`,
+        execute: () => this.generateWithOpenai(userPrompt, finalSystemPrompt, undefined, openaiModel)
+      });
+    }
+
+    if (this.alibabaClient) {
+      providers.push({
+        name: `Alibaba (${alibabaModel})`,
+        execute: () => this.generateWithAlibaba(userPrompt, finalSystemPrompt, undefined, alibabaModel)
+      });
+    }
+
+    const groqAllowed = !options.skipGroqAboveTokens || tokenEstimate < options.skipGroqAboveTokens;
+    if (this.groqClient && groqAllowed) {
+      providers.push({
+        name: `Groq (${groqModel})`,
+        execute: () => this.generateWithGroq(combinedGroqPrompt)
+      });
+    }
+
+    if (this.claudeClient) {
+      providers.push({
+        name: `Claude (${claudeModel})`,
+        execute: () => this.generateWithClaude(userPrompt, finalSystemPrompt)
+      });
+    }
+
+    if (this.client) {
+      providers.push({
+        name: `Gemini Flash (${geminiFlashModel})`,
+        execute: () => this.tryGenerateResponse(combinedGeminiPrompt, undefined, geminiFlashModel)
+      });
+      providers.push({
+        name: `Gemini Pro (${geminiProModel})`,
+        execute: () => this.tryGenerateResponse(combinedGeminiPrompt, undefined, geminiProModel)
+      });
+    }
+
+    if (this.customProvider) {
+      providers.push({
+        name: `Custom Provider (${this.customProvider.name})`,
+        execute: () => this.executeCustomProvider(
+          this.customProvider!.curlCommand,
+          combinedGeminiPrompt,
+          finalSystemPrompt,
+          userPrompt,
+          "",
+        )
+      });
+    }
+
+    if (this.activeCurlProvider && !this.customProvider) {
+      providers.push({
+        name: `cURL Provider (${this.activeCurlProvider.name})`,
+        execute: () => this.chatWithCurl(userPrompt, finalSystemPrompt)
+      });
+    }
+
+    if (this.useOllama) {
+      providers.push({
+        name: `Ollama (${this.ollamaModel})`,
+        execute: () => this.callOllama(combinedGeminiPrompt)
+      });
+    }
+
+    if (providers.length === 0) {
+      throw new Error("No LLM provider configured");
+    }
+
+    for (let rotation = 0; rotation < maxRotations; rotation++) {
+      if (rotation > 0) {
+        const backoffMs = 1000 * rotation;
+        console.log(`[LLMHelper] Internal text fallback rotation ${rotation + 1}/${maxRotations} after ${backoffMs}ms backoff...`);
+        await this.delay(backoffMs);
+      }
+
+      for (const provider of providers) {
+        try {
+          console.log(`[LLMHelper] Attempting internal text provider ${provider.name}...`);
+          const text = await this.withTimeout(provider.execute(), timeoutMs, provider.name);
+          if (text && text.trim().length > 0) {
+            console.log(`[LLMHelper] Internal text provider ${provider.name} succeeded.`);
+            return this.processResponse(text);
+          }
+          console.warn(`[LLMHelper] Internal text provider ${provider.name} returned empty output.`);
+        } catch (error: any) {
+          console.warn(`[LLMHelper] Internal text provider ${provider.name} failed: ${error.message}`);
+        }
+      }
+    }
+
+    throw new Error("All text providers failed");
+  }
+
   /**
    * Generate a suggestion based on conversation transcript - Natively-style
-   * This uses Gemini Flash to reason about what the user should say
+   * Uses the shared text fallback chain to reason about what the user should say
    * @param context - The full conversation transcript
    * @param lastQuestion - The most recent question from the interviewer
    * @returns Suggested response for the user
    */
   public async generateSuggestion(context: string, lastQuestion: string): Promise<string> {
-    const systemPrompt = `You are an expert interview coach. Based on the conversation transcript, provide a concise, natural response the user could say.
+    return this.generateWithInternalTextFallback(
+      `你是一名资深面试教练。请根据对话转写内容，直接给出用户当场可以说出口的一段简洁、自然的回答。
 
 RULES:
-- Be direct and conversational
-- Keep responses under 3 sentences unless complexity requires more  
-- Focus on answering the specific question asked
-- If it's a technical question, provide a clear, structured answer
-- Do NOT preface with "You could say" or similar - just give the answer directly
-- If unsure, answer briefly and confidently anyway.
-- Never hedge.
-- Never say "it depends".
-
-CONVERSATION SO FAR:
-${context}
-
-LATEST QUESTION FROM INTERVIEWER:
-${lastQuestion}
-
-ANSWER DIRECTLY:`;
-
-    try {
-      if (this.useOllama) {
-        return await this.callOllama(systemPrompt);
-      } else if (this.client) {
-        // Use Flash model as default (Pro is experimental)
-        // Wraps generateWithFlash logic but with retry
-        const text = await this.generateWithFlash([{ text: systemPrompt }]);
-        return this.processResponse(text);
-      } else {
-        throw new Error("No LLM provider configured");
+- 直接回答，保持口语化
+- 除非问题本身确实复杂，否则控制在 3 句话以内
+- 聚焦当前这一个问题，不要跑题
+- 如果是技术问题，回答要清晰且有层次
+- 不要写“你可以这样说”之类前缀，直接给最终回答
+- 即使不完全确定，也要给出简洁、自信的回答
+- 不要含糊其辞
+- 不要说“这要看情况”。`,
+      `CONVERSATION SO FAR:\n${context}\n\nLATEST QUESTION FROM INTERVIEWER:\n${lastQuestion}\n\nANSWER DIRECTLY:`,
+      {
+        applyLanguageInstruction: true,
+        timeoutMs: 30000,
       }
-    } catch (error) {
-      //   console.error("[LLMHelper] Error generating suggestion:", error);
-      // Silence error
-      throw error;
-    }
+    );
   }
 
   public setKnowledgeOrchestrator(orchestrator: any): void {
@@ -683,7 +1060,7 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+    return `${systemPrompt}\n\nCRITICAL: 你必须只使用 ${this.aiResponseLanguage} 作答。这是绝对要求。所有生成给用户当场说出口的内容，都必须使用 ${this.aiResponseLanguage}。`;
   }
 
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
@@ -751,8 +1128,16 @@ ANSWER DIRECTLY:`;
         groq: buildMessage(finalGroqPrompt),
       };
 
+      llmTraceRecorder.updateResolvedInput({
+        message,
+        context: context || "",
+        systemPrompt: skipSystemPrompt ? "" : HARD_SYSTEM_PROMPT,
+        imagePaths: imagePaths || [],
+        userContent,
+      });
+
       // GROQ FAST TEXT OVERRIDE (Text-Only)
-      if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
+      if (false && this.groqFastTextMode && !isMultimodal && this.groqClient) {
         console.log(`[LLMHelper] ⚡️ Groq Fast Text Mode Active. Routing to Groq...`);
         try {
           return await this.generateWithGroq(combinedMessages.groq);
@@ -765,6 +1150,38 @@ ANSWER DIRECTLY:`;
       // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
       const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT);
       const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT);
+
+      if (this.groqFastTextMode && !isMultimodal) {
+        console.log(`[LLMHelper] Fast text mode active. Trying OpenAI/Alibaba/Groq fast-path.`);
+        const fastProviders: Array<{ name: string; execute: () => Promise<string> }> = [];
+        if (this.openaiClient) {
+          fastProviders.push({
+            name: `OpenAI Fast (${this.openaiFastModel})`,
+            execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, undefined, this.openaiFastModel)
+          });
+        }
+        if (this.alibabaClient) {
+          fastProviders.push({
+            name: `Alibaba Fast (${this.alibabaFastModel})`,
+            execute: () => this.generateWithAlibaba(userContent, openaiSystemPrompt, undefined, this.alibabaFastModel)
+          });
+        }
+        if (this.groqClient) {
+          fastProviders.push({
+            name: `Groq Fast (${GROQ_MODEL})`,
+            execute: () => this.generateWithGroq(combinedMessages.groq)
+          });
+        }
+
+        for (const provider of fastProviders) {
+          try {
+            console.log(`[LLMHelper] Trying fast-path provider ${provider.name}...`);
+            return await provider.execute();
+          } catch (e: any) {
+            console.warn(`[LLMHelper] Fast-path provider ${provider.name} failed:`, e.message);
+          }
+        }
+      }
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini);
@@ -790,7 +1207,10 @@ ANSWER DIRECTLY:`;
 
       // --- Direct Routing based on Selected Model ---
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
-        return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths);
+        return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths, this.currentModelId);
+      }
+      if (this.isAlibabaModel(this.currentModelId) && this.alibabaClient) {
+        return await this.generateWithAlibaba(userContent, openaiSystemPrompt, imagePaths, this.currentModelId);
       }
       if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
         return await this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths);
@@ -814,16 +1234,20 @@ ANSWER DIRECTLY:`;
       const providers: ProviderAttempt[] = [];
 
       // Get auto-discovered text model IDs from ModelVersionManager
-      const textOpenAI = this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+      const textOpenAI = this.openaiPreferredModel || this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+      const textAlibaba = this.alibabaPreferredModel;
       const textGeminiFlash = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_FLASH).tier1;
       const textGeminiPro = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_PRO).tier1;
       const textClaude = this.modelVersionManager.getTextTieredModels(TextModelFamily.CLAUDE).tier1;
       const textGroq = this.modelVersionManager.getTextTieredModels(TextModelFamily.GROQ).tier1;
 
       if (isMultimodal) {
-        // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq -> Custom/Ollama
+        // MULTIMODAL PROVIDER ORDER: OpenAI -> Alibaba -> Gemini Flash -> Claude -> Gemini Pro -> Groq
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths, textOpenAI) });
+        }
+        if (this.alibabaClient) {
+          providers.push({ name: `Alibaba (${textAlibaba})`, execute: () => this.generateWithAlibaba(userContent, openaiSystemPrompt, imagePaths, textAlibaba) });
         }
         if (this.client) {
           providers.push({
@@ -847,9 +1271,18 @@ ANSWER DIRECTLY:`;
           });
         }
       } else {
-        // TEXT-ONLY: All providers including Groq
+        // TEXT-ONLY ORDER: OpenAI -> Alibaba -> Groq -> Claude -> Gemini Flash -> Gemini Pro
+        if (this.openaiClient) {
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, undefined, textOpenAI) });
+        }
+        if (this.alibabaClient) {
+          providers.push({ name: `Alibaba (${textAlibaba})`, execute: () => this.generateWithAlibaba(userContent, openaiSystemPrompt, undefined, textAlibaba) });
+        }
         if (this.groqClient) {
           providers.push({ name: `Groq (${textGroq})`, execute: () => this.generateWithGroq(combinedMessages.groq) });
+        }
+        if (this.claudeClient) {
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt) });
         }
         if (this.client) {
           providers.push({
@@ -860,12 +1293,6 @@ ANSWER DIRECTLY:`;
             name: `Gemini Pro (${textGeminiPro})`,
             execute: () => this.tryGenerateResponse(combinedMessages.gemini, undefined, textGeminiPro)
           });
-        }
-        if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt) });
-        }
-        if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt) });
         }
       }
 
@@ -930,15 +1357,23 @@ ANSWER DIRECTLY:`;
 
     // Priority 1: OpenAI
     if (this.openaiClient) {
-      providers.push({ name: `OpenAI (${OPENAI_MODEL})`, execute: () => this.generateWithOpenai(message) });
+      providers.push({ name: `OpenAI (${this.openaiPreferredModel})`, execute: () => this.generateWithOpenai(message) });
     }
 
-    // Priority 2: Claude
+    // Priority 2: Alibaba/Qwen
+    if (this.alibabaClient) {
+      providers.push({
+        name: `Alibaba (${this.alibabaPreferredModel})`,
+        execute: () => this.generateWithAlibaba(message, undefined, undefined, this.alibabaPreferredModel)
+      });
+    }
+
+    // Priority 3: Claude
     if (this.claudeClient) {
       providers.push({ name: `Claude (${CLAUDE_MODEL})`, execute: () => this.generateWithClaude(message) });
     }
 
-    // Priority 3: Gemini Pro (Skip Flash, and don't mutate this.geminiModel to avoid race conditions)
+    // Priority 4: Gemini Pro (Skip Flash, and don't mutate this.geminiModel to avoid race conditions)
     if (this.client) {
       providers.push({
         name: `Gemini Pro (${GEMINI_PRO_MODEL})`,
@@ -962,13 +1397,13 @@ ANSWER DIRECTLY:`;
       });
     }
 
-    // Priority 4: Groq (Fallback despite JSON hallucination risks)
+    // Priority 5: Groq (Fallback despite JSON hallucination risks)
     if (this.groqClient) {
       providers.push({ name: `Groq (${GROQ_MODEL}) fallback`, execute: () => this.generateWithGroq(message) });
     }
 
     if (providers.length === 0) {
-      throw new Error('No reasoning model available. Please configure an OpenAI, Claude, Gemini, or Groq API key.');
+      throw new Error('No reasoning model available. Please configure an OpenAI, Alibaba, Claude, Gemini, or Groq API key.');
     }
 
     for (const provider of providers) {
@@ -1008,36 +1443,12 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming OpenAI generation with proper system/user separation
    */
-  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
-    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string): Promise<string> {
+    return this.generateWithOpenAICompatible('openai', userMessage, systemPrompt, imagePaths, modelOverride);
+  }
 
-    await this.rateLimiters.openai.acquire();
-
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
-
-    if (imagePaths?.length) {
-      const contentParts: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
-        }
-      }
-      messages.push({ role: "user", content: contentParts });
-    } else {
-      messages.push({ role: "user", content: userMessage });
-    }
-
-    const response = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
-
-    return response.choices[0]?.message?.content || "";
+  private async generateWithAlibaba(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string): Promise<string> {
+    return this.generateWithOpenAICompatible('alibaba', userMessage, systemPrompt, imagePaths, modelOverride);
   }
 
   // The handler for cURL requests
@@ -1616,7 +2027,7 @@ ANSWER DIRECTLY:`;
           if (!this.openaiClient) return null;
           return {
             name: `OpenAI (${modelId})`,
-            execute: () => this.generateWithOpenai(userPrompt, systemPrompt, isMultimodal ? imagePaths : undefined)
+            execute: () => this.generateWithOpenai(userPrompt, systemPrompt, isMultimodal ? imagePaths : undefined, modelId)
           };
 
         case ModelFamily.GEMINI_FLASH:
@@ -1692,9 +2103,16 @@ ANSWER DIRECTLY:`;
     // Build 3-tier retry rotation from ModelVersionManager
     // ──────────────────────────────────────────────────────────────────
     const allTiers = this.modelVersionManager.getAllVisionTiers();
+    const alibabaVisionModel = this.alibabaPreferredModel || ALIBABA_MODEL;
 
     const buildTierProviders = (tierKey: 'tier1' | 'tier2' | 'tier3'): ProviderAttempt[] => {
       const result: ProviderAttempt[] = [];
+      if (this.alibabaClient) {
+        result.push({
+          name: `Alibaba (${alibabaVisionModel})`,
+          execute: () => this.generateWithAlibaba(userPrompt, systemPrompt, isMultimodal ? imagePaths : undefined, alibabaVisionModel)
+        });
+      }
       for (const entry of allTiers) {
         const modelId = entry[tierKey];
         const attempt = buildProviderForFamily(entry.family, modelId);
@@ -1858,6 +2276,14 @@ ANSWER DIRECTLY:`;
       groq: buildCombinedMessage(GROQ_SYSTEM_PROMPT),
     };
 
+    llmTraceRecorder.updateResolvedInput({
+      message,
+      context: context || "",
+      systemPrompt: skipSystemPrompt ? "" : HARD_SYSTEM_PROMPT,
+      imagePaths: imagePaths || [],
+      userContent,
+    });
+
     if (this.useOllama) {
       const response = await this.callOllama(combinedMessages.gemini);
       yield response;
@@ -1878,8 +2304,42 @@ ANSWER DIRECTLY:`;
     const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT);
     const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT);
 
+    if (this.groqFastTextMode && !isMultimodal) {
+      console.log(`[LLMHelper] Fast text mode active for streaming. Trying OpenAI/Alibaba/Groq fast-path.`);
+      const fastProviders: ProviderAttempt[] = [];
+      if (this.openaiClient) {
+        fastProviders.push({
+          name: `OpenAI Fast (${this.openaiFastModel})`,
+          execute: () => this.streamWithOpenai(userContent, openaiSystemPrompt, this.openaiFastModel)
+        });
+      }
+      if (this.alibabaClient) {
+        fastProviders.push({
+          name: `Alibaba Fast (${this.alibabaFastModel})`,
+          execute: () => this.streamWithAlibaba(userContent, openaiSystemPrompt, this.alibabaFastModel)
+        });
+      }
+      if (this.groqClient) {
+        fastProviders.push({
+          name: `Groq Fast (${GROQ_MODEL})`,
+          execute: () => this.streamWithGroq(combinedMessages.groq)
+        });
+      }
+
+      for (const provider of fastProviders) {
+        try {
+          console.log(`[LLMHelper] Trying streaming fast-path provider ${provider.name}...`);
+          yield* provider.execute();
+          return;
+        } catch (err: any) {
+          console.warn(`[LLMHelper] Streaming fast-path provider ${provider.name} failed: ${err.message}`);
+        }
+      }
+    }
+
     // Get auto-discovered text model IDs from ModelVersionManager
-    const textOpenAI = this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+    const textOpenAI = this.openaiPreferredModel || this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+    const textAlibaba = this.alibabaPreferredModel;
     const textGeminiFlash = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_FLASH).tier1;
     const textGeminiPro = this.modelVersionManager.getTextTieredModels(TextModelFamily.GEMINI_PRO).tier1;
     const textClaude = this.modelVersionManager.getTextTieredModels(TextModelFamily.CLAUDE).tier1;
@@ -1888,7 +2348,10 @@ ANSWER DIRECTLY:`;
     if (isMultimodal) {
       // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq Scout 4
       if (this.openaiClient) {
-        providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt) });
+        providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt, textOpenAI) });
+      }
+      if (this.alibabaClient) {
+        providers.push({ name: `Alibaba (${textAlibaba})`, execute: () => this.streamWithAlibabaMultimodal(userContent, imagePaths!, openaiSystemPrompt, textAlibaba) });
       }
       if (this.client) {
         providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash, imagePaths) });
@@ -1904,11 +2367,14 @@ ANSWER DIRECTLY:`;
       }
     } else {
       // TEXT-ONLY PROVIDER ORDER: Groq → OpenAI → Claude → Gemini Flash → Gemini Pro
+      if (this.openaiClient) {
+        providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenai(userContent, openaiSystemPrompt, textOpenAI) });
+      }
+      if (this.alibabaClient) {
+        providers.push({ name: `Alibaba (${textAlibaba})`, execute: () => this.streamWithAlibaba(userContent, openaiSystemPrompt, textAlibaba) });
+      }
       if (this.groqClient) {
         providers.push({ name: `Groq (${textGroq})`, execute: () => this.streamWithGroq(combinedMessages.groq) });
-      }
-      if (this.openaiClient) {
-        providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenai(userContent, openaiSystemPrompt) });
       }
       if (this.claudeClient) {
         providers.push({ name: `Claude (${textClaude})`, execute: () => this.streamWithClaude(userContent, claudeSystemPrompt) });
@@ -1963,7 +2429,8 @@ ANSWER DIRECTLY:`;
     message: string,
     imagePaths?: string[],
     context?: string,
-    systemPromptOverride?: string // Optional override (defaults to HARD_SYSTEM_PROMPT)
+    systemPromptOverride?: string, // Optional override (defaults to HARD_SYSTEM_PROMPT)
+    routeOptions: StreamChatRouteOptions = {}
   ): AsyncGenerator<string, void, unknown> {
 
     // ============================================================
@@ -2008,8 +2475,53 @@ ANSWER DIRECTLY:`;
       ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
       : message;
 
+    llmTraceRecorder.updateResolvedInput({
+      message,
+      context: context || "",
+      systemPrompt: baseSystemPrompt,
+      imagePaths: imagePaths || [],
+      userContent,
+    });
+
+    if (!routeOptions.disableFastPath && this.groqFastTextMode && !isMultimodal) {
+      console.log(`[LLMHelper] Fast text mode active (streamChat). Trying OpenAI/Alibaba/Groq fast-path.`);
+      const fastProviders: Array<{ name: string; route: StreamChatRouteInfo; execute: () => AsyncGenerator<string, void, unknown> }> = [];
+      if (this.openaiClient) {
+        fastProviders.push({
+          name: `OpenAI Fast (${this.openaiFastModel})`,
+          route: this.createRouteInfo('openai', this.openaiFastModel, true),
+          execute: () => this.streamWithOpenai(userContent, finalSystemPrompt, this.openaiFastModel)
+        });
+      }
+      if (this.alibabaClient) {
+        fastProviders.push({
+          name: `Alibaba Fast (${this.alibabaFastModel})`,
+          route: this.createRouteInfo('alibaba', this.alibabaFastModel, true),
+          execute: () => this.streamWithAlibaba(userContent, finalSystemPrompt, this.alibabaFastModel)
+        });
+      }
+      if (this.groqClient) {
+        fastProviders.push({
+          name: `Groq Fast (${GROQ_MODEL})`,
+          route: this.createRouteInfo('groq', GROQ_MODEL, true),
+          execute: () => this.streamWithGroq(`${finalSystemPrompt}\n\n${userContent}`)
+        });
+      }
+
+      for (const provider of fastProviders) {
+        try {
+          console.log(`[LLMHelper] Trying streamChat fast-path provider ${provider.name}...`);
+          routeOptions.onRouteSelected?.(provider.route);
+          yield* provider.execute();
+          return;
+        } catch (e: any) {
+          console.warn(`[LLMHelper] streamChat fast-path provider ${provider.name} failed: ${e.message}`);
+        }
+      }
+    }
+
     // GROQ FAST TEXT OVERRIDE (Text-Only)
-    if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
+    if (false && this.groqFastTextMode && !isMultimodal && this.groqClient) {
       console.log(`[LLMHelper] ⚡️ Groq Fast Text Mode Active (Streaming). Routing to Groq...`);
       try {
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
@@ -2025,12 +2537,14 @@ ANSWER DIRECTLY:`;
 
     // 1. Ollama Streaming
     if (this.useOllama) {
+      routeOptions.onRouteSelected?.(this.createRouteInfo('ollama', this.ollamaModel, false));
       yield* this.streamWithOllama(message, context, finalSystemPrompt);
       return;
     }
 
     // 2. Custom Provider Streaming (via cURL - Non-streaming fallback for now)
     if (this.activeCurlProvider) {
+      routeOptions.onRouteSelected?.(this.createRouteInfo('custom', this.activeCurlProvider.id, false));
       const response = await this.executeCustomProvider(
         this.activeCurlProvider.curlCommand,
         userContent,
@@ -2050,10 +2564,22 @@ ANSWER DIRECTLY:`;
     if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
+      routeOptions.onRouteSelected?.(this.createRouteInfo('openai', this.currentModelId, false));
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem);
+        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem, this.currentModelId);
       } else {
-        yield* this.streamWithOpenai(userContent, finalOpenAiSystem);
+        yield* this.streamWithOpenai(userContent, finalOpenAiSystem, this.currentModelId);
+      }
+      return;
+    }
+
+    // Alibaba/Qwen
+    if (this.isAlibabaModel(this.currentModelId) && this.alibabaClient) {
+      routeOptions.onRouteSelected?.(this.createRouteInfo('alibaba', this.currentModelId, false));
+      if (isMultimodal && imagePaths) {
+        yield* this.streamWithAlibabaMultimodal(userContent, imagePaths, finalSystemPrompt, this.currentModelId);
+      } else {
+        yield* this.streamWithAlibaba(userContent, finalSystemPrompt, this.currentModelId);
       }
       return;
     }
@@ -2062,6 +2588,7 @@ ANSWER DIRECTLY:`;
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
       const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
       const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
+      routeOptions.onRouteSelected?.(this.createRouteInfo('claude', this.currentModelId, false));
       if (isMultimodal && imagePaths) {
         yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem);
       } else {
@@ -2072,6 +2599,7 @@ ANSWER DIRECTLY:`;
 
     // Groq (Text + Multimodal)
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
+      routeOptions.onRouteSelected?.(this.createRouteInfo('groq', this.currentModelId, false));
       if (isMultimodal && imagePaths) {
         // Route multimodal to Groq Llama 4 Scout (vision-capable)
         const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
@@ -2092,12 +2620,14 @@ ANSWER DIRECTLY:`;
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
         const fullMsg = `${finalSystemPrompt}\n\n${userContent}`;
+        routeOptions.onRouteSelected?.(this.createRouteInfo('gemini', this.currentModelId, false));
         yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths);
         return;
       }
 
       // Race strategy (default)
       const raceMsg = `${finalSystemPrompt}\n\n${userContent}`;
+      routeOptions.onRouteSelected?.(this.createRouteInfo('gemini', this.geminiModel, false));
       yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
     } else {
       throw new Error("No LLM provider available");
@@ -2168,28 +2698,8 @@ ANSWER DIRECTLY:`;
   /**
    * Stream response from OpenAI with proper system/user message separation
    */
-  private async * streamWithOpenai(userMessage: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
-    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
-
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
-    messages.push({ role: "user", content: userMessage });
-
-    const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      stream: true,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
-
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
-      }
-    }
+  private async * streamWithOpenai(userMessage: string, systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+    yield* this.streamWithOpenAICompatible('openai', userMessage, undefined, systemPrompt, modelOverride);
   }
 
   /**
@@ -2215,36 +2725,16 @@ ANSWER DIRECTLY:`;
   /**
    * Stream multimodal (image + text) response from OpenAI with system/user separation
    */
-  private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
-    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+  private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+    yield* this.streamWithOpenAICompatible('openai', userMessage, imagePaths, systemPrompt, modelOverride);
+  }
 
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
+  private async * streamWithAlibaba(userMessage: string, systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+    yield* this.streamWithOpenAICompatible('alibaba', userMessage, undefined, systemPrompt, modelOverride);
+  }
 
-    const contentParts: any[] = [{ type: "text", text: userMessage }];
-    for (const p of imagePaths) {
-      if (fs.existsSync(p)) {
-        const imageData = await fs.promises.readFile(p);
-        contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
-      }
-    }
-    messages.push({ role: "user", content: contentParts });
-
-    const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      stream: true,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
-
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
-      }
-    }
+  private async * streamWithAlibabaMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+    yield* this.streamWithOpenAICompatible('alibaba', userMessage, imagePaths, systemPrompt, modelOverride);
   }
 
   /**
@@ -2646,9 +3136,9 @@ ANSWER DIRECTLY:`;
     }
   }
 
-  public getCurrentProvider(): "ollama" | "gemini" | "custom" {
-    if (this.customProvider) return "custom";
-    return this.useOllama ? "ollama" : "gemini";
+  public getCurrentProvider(): "ollama" | CloudProviderId | "custom" {
+    if (this.customProvider || this.activeCurlProvider) return "custom";
+    return this.useOllama ? "ollama" : this.currentProviderId;
   }
 
   public getCurrentModel(): string {
@@ -2889,18 +3379,43 @@ ANSWER DIRECTLY:`;
 
   /**
    * Robust Meeting Summary Generation
-   * Strategy:
-   * 1. Groq (if context text < 100k tokens approx)
-   * 2. Gemini Flash (Retry 2x)
-   * 3. Gemini Pro (Retry 5x)
+   * Uses the shared provider-aware text fallback chain for summary/title generation.
    */
   public async generateMeetingSummary(systemPrompt: string, context: string, groqSystemPrompt?: string): Promise<string> {
     console.log(`[LLMHelper] generateMeetingSummary called. Context length: ${context.length}`);
 
-    // Helper: Estimate tokens (crude approximation: 4 chars = 1 token)
-    const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-    const tokenCount = estimateTokens(context);
+    const tokenCount = Math.ceil(context.length / 4);
     console.log(`[LLMHelper] Estimated tokens: ${tokenCount}`);
+    const strictSystemPrompt = `${systemPrompt}
+
+CRITICAL OUTPUT CONTRACT:
+- 必须严格遵守要求的输出格式。
+- 只返回最终答案。
+- 除非任务明确要求，否则不要添加解释、前言、评论或 markdown 代码块。
+- 如果任务要求返回 JSON，就只返回合法 JSON。
+- 如果任务要求标题，就只返回标题文本。
+- 如果任务要求一句话，就只返回一句话。`;
+    const strictRequest = `${strictSystemPrompt}\n\nMEETING CONTEXT:\n${context}\n\n只返回要求的结果。`;
+
+    try {
+      const structuredResult = await this.generateContentStructured(strictRequest);
+      if (structuredResult && structuredResult.trim().length > 0) {
+        return this.processResponse(structuredResult);
+      }
+    } catch (error: any) {
+      console.warn(`[LLMHelper] Structured meeting summary path failed: ${error.message}`);
+    }
+
+    return this.generateWithInternalTextFallback(
+      strictSystemPrompt,
+      `MEETING CONTEXT:\n${context}\n\n只返回要求的结果。`,
+      {
+        groqSystemPrompt,
+        timeoutMs: tokenCount >= 100000 ? 60000 : 45000,
+        maxRotations: 3,
+        skipGroqAboveTokens: 100000,
+      }
+    );
 
     // ATTEMPT 1: Groq (if text-only and within limits)
     // Groq Llama 3.3 70b has ~128k context, let's be safe with 100k

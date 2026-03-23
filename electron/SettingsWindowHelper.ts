@@ -3,9 +3,10 @@ import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
 
 const isDev = process.env.NODE_ENV === "development"
+const devServerUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5180";
 
 const startUrl = isDev
-    ? "http://localhost:5180"
+    ? devServerUrl
     : `file://${path.join(app.getAppPath(), "dist/index.html")}`
 
 export class SettingsWindowHelper {

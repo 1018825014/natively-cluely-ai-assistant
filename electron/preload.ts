@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron"
 
+type LlmProviderConfig = {
+  apiKey?: string
+  baseUrl?: string
+  preferredModel?: string
+}
+
+type LlmRuntimeProvider = "ollama" | "gemini" | "openai" | "alibaba" | "groq" | "claude" | "custom"
+
 type OverlayWindowState = {
   visible: boolean
   mode: "launcher" | "overlay"
@@ -7,6 +15,9 @@ type OverlayWindowState = {
   launcherVisible: boolean
   overlayAlwaysOnTop: boolean
   overlayFocused: boolean
+  isMaximized: boolean
+  bounds: { x: number; y: number; width: number; height: number } | null
+  restorableBounds: { x: number; y: number; width: number; height: number } | null
 }
 
 type NativeAudioTranscript = {
@@ -22,6 +33,212 @@ type NativeAudioSpeechEnded = {
   timestamp: number
 }
 
+type LiveTranscriptSegment = {
+  id: string
+  speaker: "interviewer" | "user"
+  text: string
+  timestamp: number
+  updatedAt: number
+  status: "active" | "final"
+  edited: boolean
+  lastProviderText: string
+  confidence?: number
+}
+
+type RawInterviewerTranscriptEvent = {
+  id: string
+  text: string
+  timestamp: number
+  final: boolean
+  confidence?: number
+}
+
+type RawInterviewerTranscriptState = {
+  latest: RawInterviewerTranscriptEvent | null
+  fullText: string
+  events: RawInterviewerTranscriptEvent[]
+}
+
+type PromptLabActionId =
+  | "what_to_answer"
+  | "follow_up_refine"
+  | "recap"
+  | "follow_up_questions"
+  | "answer"
+
+type PromptLabFieldKind = "fixed" | "dynamic" | "runtime" | "transcript"
+
+type PromptLabFieldPreview = {
+  key: string
+  label: string
+  kind: PromptLabFieldKind
+  editable: boolean
+  scope: "fixed" | "meeting" | "runtime" | "transcript"
+  text: string
+  baseText: string
+  charCount: number
+  summaryStart: string
+  summaryEnd: string
+  overrideActive: boolean
+  description?: string
+}
+
+type PromptLabTranscriptSummary = {
+  key: string
+  label: string
+  speaker: "interviewer" | "user"
+  turnCount: number
+  charCount: number
+  summaryStart: string
+  summaryEnd: string
+}
+
+type PromptLabActionPreview = {
+  action: PromptLabActionId
+  title: string
+  fixedPromptBase: string
+  fixedPromptResolved: string
+  fixedFields: PromptLabFieldPreview[]
+  dynamicFields: PromptLabFieldPreview[]
+  runtimeFields: PromptLabFieldPreview[]
+  transcriptSummaries: PromptLabTranscriptSummary[]
+  hasUserOverrides: boolean
+  execution: {
+    systemPrompt?: string
+    contextPrompt?: string
+    message?: string
+    imagePaths: string[]
+    runtime: Record<string, unknown>
+  }
+}
+
+type RuntimeLogLevel = "debug" | "info" | "warn" | "error"
+
+type RuntimeLogEntry = {
+  timestamp: string
+  level: RuntimeLogLevel
+  source: string
+  message: string
+  details?: string
+}
+
+type LlmTraceActionType =
+  | "what_to_answer"
+  | "follow_up"
+  | "recap"
+  | "follow_up_questions"
+  | "answer"
+  | "manual_submit"
+  | "image_analysis"
+  | "rag_query_live"
+  | "rag_query_meeting"
+  | "rag_query_global"
+
+type LlmTraceStepRecord = {
+  id: string
+  actionId: string
+  kind: "transport" | "rag" | "app"
+  stage: string
+  lane?: string
+  provider: string
+  model: string
+  method: string
+  url: string
+  requestHeaders: string
+  requestBody: string
+  responseStatus?: number
+  responseHeaders: string
+  responseBody: string
+  durationMs?: number
+  streamed: boolean
+  truncated: boolean
+  error?: string
+  startedAt: string
+  endedAt?: string
+}
+
+type LlmTraceActionRecord = {
+  id: string
+  sessionId: string
+  type: LlmTraceActionType
+  label: string
+  requestId?: string
+  startedAt: string
+  endedAt?: string
+  status: "running" | "completed" | "error"
+  steps: LlmTraceStepRecord[]
+  resolvedInput?: Record<string, unknown>
+  error?: string
+}
+
+type LlmTraceActionContext = {
+  actionId?: string
+  type?: LlmTraceActionType
+  label?: string
+  requestId?: string
+}
+
+type RendererLogPayload = {
+  level?: RuntimeLogLevel
+  type?: string
+  source?: string
+  context?: string
+  message?: string
+  details?: string
+  stack?: string
+  componentStack?: string
+  windowUrl?: string
+}
+
+const formatRendererValue = (value: unknown): string => {
+  if (value instanceof Error) {
+    return value.stack || value.message
+  }
+
+  if (typeof value === "string") {
+    return value
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const sendRendererLog = (payload: RendererLogPayload): void => {
+  try {
+    ipcRenderer.send("runtime-log:renderer-report", payload)
+  } catch {
+    // Logging must never break renderer startup.
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (event) => {
+    sendRendererLog({
+      level: "error",
+      type: "window-error",
+      source: "renderer-window",
+      message: event.message || "Unhandled renderer error",
+      stack: event.error instanceof Error ? event.error.stack : undefined,
+      details: event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : undefined,
+      windowUrl: window.location.href,
+    })
+  })
+
+  window.addEventListener("unhandledrejection", (event) => {
+    sendRendererLog({
+      level: "error",
+      type: "unhandledrejection",
+      source: "renderer-window",
+      message: "Unhandled promise rejection",
+      details: formatRendererValue(event.reason),
+      windowUrl: window.location.href,
+    })
+  })
+}
+
 // Types for the exposed Electron API
 interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -34,6 +251,8 @@ interface ElectronAPI {
     width: number
     height: number
   }) => Promise<{ success: boolean }>
+  maximizeOverlayToWorkArea: () => Promise<OverlayWindowState>
+  restoreOverlayBounds: () => Promise<OverlayWindowState>
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (
@@ -64,23 +283,47 @@ interface ElectronAPI {
   moveWindowUp: () => Promise<void>
   moveWindowDown: () => Promise<void>
 
-  analyzeImageFile: (path: string) => Promise<void>
+  analyzeImageFile: (path: string, traceContext?: LlmTraceActionContext) => Promise<void>
   quitApp: () => Promise<void>
+  getRuntimeLogInfo: () => Promise<{ logDirectory: string; currentLogFile: string }>
+  getRuntimeLogEntries: (query?: { limit?: number; levels?: RuntimeLogLevel[] }) => Promise<RuntimeLogEntry[]>
+  openRuntimeLogDirectory: () => Promise<{ success: boolean; error?: string; logDirectory: string; currentLogFile: string }>
+  getLlmTraceInfo: () => Promise<{ logDirectory: string; currentLogFile: string; sessionId: string }>
+  getLlmTraceActions: (query?: { limit?: number; currentSessionOnly?: boolean; actionTypes?: LlmTraceActionType[] }) => Promise<LlmTraceActionRecord[]>
+  openLlmTraceDirectory: () => Promise<{ success: boolean; error?: string; logDirectory: string; currentLogFile: string; sessionId: string }>
+  clearLlmTraceSession: () => Promise<{ success: boolean; sessionId: string }>
+  openTraceWindow: () => Promise<{ success: boolean }>
+  getRawTranscriptState: () => Promise<RawInterviewerTranscriptState>
+  openRawTranscriptWindow: () => Promise<{ success: boolean }>
+  openSttCompareWindow: () => Promise<{ success: boolean }>
+  openPromptLabWindow: (payload?: { action?: PromptLabActionId; context?: any }) => Promise<{ success: boolean }>
+  getPromptLabActionPreview: (action: PromptLabActionId, context?: any) => Promise<PromptLabActionPreview>
+  getPromptLabFixedOverrides: () => Promise<Record<string, any>>
+  setPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => Promise<{ success: boolean }>
+  resetPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => Promise<{ success: boolean }>
+  setPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => Promise<{ success: boolean }>
+  resetPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => Promise<{ success: boolean }>
+  resetPromptLabActionDynamicOverrides: (payload: { action: PromptLabActionId }) => Promise<{ success: boolean }>
+  onLlmTraceUpdate: (callback: (data: { kind: "upsert"; action: LlmTraceActionRecord } | { kind: "cleared"; sessionId: string }) => void) => () => void
+  onPromptLabFocusAction: (callback: (action: PromptLabActionId) => void) => () => void
+  logErrorToMain: (payload: RendererLogPayload) => void
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: LlmRuntimeProvider; model: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', config?: LlmProviderConfig) => Promise<{ success: boolean; error?: string; diagnostics?: string[] }>
   selectServiceAccount: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  setOpenaiProviderConfig: (config: LlmProviderConfig) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean; hasAlibabaKey: boolean; technicalGlossaryConfig?: any }>
+  setAlibabaLlmProviderConfig: (config: LlmProviderConfig) => Promise<{ success: boolean; error?: string }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasAlibabaLlmKey: boolean; openaiBaseUrl?: string; alibabaLlmBaseUrl?: string; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; alibabaPreferredModel?: string; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean; hasAlibabaKey: boolean; technicalGlossaryConfig?: any }>
 
   // STT Provider Management
   setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba') => Promise<{ success: boolean; error?: string }>
@@ -96,7 +339,7 @@ interface ElectronAPI {
   setSonioxApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setAlibabaSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   getTechnicalGlossary: () => Promise<any>
-  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; error?: string }>
+  setTechnicalGlossary: (config: any) => Promise<{ success: boolean; config?: any; warning?: string; error?: string }>
   testSttConnection: (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba', apiKey: string, region?: string) => Promise<{ success: boolean; error?: string }>
   startSttCompareSession: () => Promise<{ success: boolean; error?: string }>
   stopSttCompareSession: () => Promise<{ success: boolean; error?: string }>
@@ -110,6 +353,11 @@ interface ElectronAPI {
   onNativeAudioSuggestion: (callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void) => () => void
   onNativeAudioConnected: (callback: () => void) => () => void
   onNativeAudioDisconnected: (callback: () => void) => () => void
+  getLiveTranscriptState: () => Promise<LiveTranscriptSegment[]>
+  editLiveTranscriptSegment: (payload: { id: string; text: string }) => Promise<{ success: boolean; segment?: LiveTranscriptSegment; state?: LiveTranscriptSegment[]; error?: string }>
+  commitLiveTranscriptSegment: (payload?: { id?: string; speaker?: "interviewer" | "user" }) => Promise<{ success: boolean; segment?: LiveTranscriptSegment; state?: LiveTranscriptSegment[]; error?: string }>
+  resyncLiveTranscriptRag: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>
+  onLiveTranscriptUpdate: (callback: (segments: LiveTranscriptSegment[]) => void) => () => void
   onSuggestionGenerated: (callback: (data: { question: string; suggestion: string; confidence: number }) => void) => () => void
   onSuggestionProcessingStart: (callback: () => void) => () => void
   onSuggestionError: (callback: (error: { error: string }) => void) => () => void
@@ -194,7 +442,7 @@ interface ElectronAPI {
   toggleAdvancedSettings: () => Promise<void>
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean; traceContext?: LlmTraceActionContext }) => Promise<void>
   onGeminiStreamToken: (callback: (token: string) => void) => () => void
   onGeminiStreamDone: (callback: () => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void
@@ -233,9 +481,9 @@ interface ElectronAPI {
   testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
 
   // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryMeeting: (meetingId: string, query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryLive: (query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryGlobal: (query: string, traceContext?: LlmTraceActionContext) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<{ success: boolean }>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
@@ -318,6 +566,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("update-content-dimensions", dimensions),
   setOverlayBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke("set-overlay-bounds", bounds),
+  maximizeOverlayToWorkArea: () => ipcRenderer.invoke("maximize-overlay-to-work-area"),
+  restoreOverlayBounds: () => ipcRenderer.invoke("restore-overlay-bounds"),
   getRecognitionLanguages: () => ipcRenderer.invoke("get-recognition-languages"),
   takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
   takeSelectiveScreenshot: () => ipcRenderer.invoke("take-selective-screenshot"),
@@ -439,8 +689,49 @@ contextBridge.exposeInMainWorld("electronAPI", {
   moveWindowUp: () => ipcRenderer.invoke("move-window-up"),
   moveWindowDown: () => ipcRenderer.invoke("move-window-down"),
 
-  analyzeImageFile: (path: string) => ipcRenderer.invoke("analyze-image-file", path),
+  analyzeImageFile: (path: string, traceContext?: LlmTraceActionContext) => ipcRenderer.invoke("analyze-image-file", path, traceContext),
   quitApp: () => ipcRenderer.invoke("quit-app"),
+  getRuntimeLogInfo: () => ipcRenderer.invoke("runtime-log:get-info"),
+  getRuntimeLogEntries: (query?: { limit?: number; levels?: RuntimeLogLevel[] }) => ipcRenderer.invoke("runtime-log:get-entries", query),
+  openRuntimeLogDirectory: () => ipcRenderer.invoke("runtime-log:open-directory"),
+  getLlmTraceInfo: () => ipcRenderer.invoke("llm-trace:get-info"),
+  getLlmTraceActions: (query?: { limit?: number; currentSessionOnly?: boolean; actionTypes?: LlmTraceActionType[] }) => ipcRenderer.invoke("llm-trace:get-actions", query),
+  openLlmTraceDirectory: () => ipcRenderer.invoke("llm-trace:open-directory"),
+  clearLlmTraceSession: () => ipcRenderer.invoke("llm-trace:clear-session"),
+  openTraceWindow: () => ipcRenderer.invoke("open-trace-window"),
+  getRawTranscriptState: () => ipcRenderer.invoke("raw-transcript:get-state"),
+  openRawTranscriptWindow: () => ipcRenderer.invoke("open-raw-transcript-window"),
+  openSttCompareWindow: () => ipcRenderer.invoke("open-stt-compare-window"),
+  openPromptLabWindow: (payload?: { action?: PromptLabActionId; context?: any }) => ipcRenderer.invoke("open-prompt-lab-window", payload),
+  getPromptLabActionPreview: (action: PromptLabActionId, context?: any) => ipcRenderer.invoke("prompt-lab:get-action-preview", action, context),
+  getPromptLabFixedOverrides: () => ipcRenderer.invoke("prompt-lab:get-fixed-overrides"),
+  setPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => ipcRenderer.invoke("prompt-lab:set-fixed-override", payload),
+  resetPromptLabFixedOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => ipcRenderer.invoke("prompt-lab:reset-fixed-override", payload),
+  setPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string; value: string }) => ipcRenderer.invoke("prompt-lab:set-dynamic-override", payload),
+  resetPromptLabDynamicOverride: (payload: { action: PromptLabActionId; fieldKey: string }) => ipcRenderer.invoke("prompt-lab:reset-dynamic-override", payload),
+  resetPromptLabActionDynamicOverrides: (payload: { action: PromptLabActionId }) => ipcRenderer.invoke("prompt-lab:reset-action-dynamic-overrides", payload),
+  onRawTranscriptUpdate: (callback: (state: RawInterviewerTranscriptState) => void) => {
+    const subscription = (_: any, data: RawInterviewerTranscriptState) => callback(data)
+    ipcRenderer.on("raw-transcript:update", subscription)
+    return () => {
+      ipcRenderer.removeListener("raw-transcript:update", subscription)
+    }
+  },
+  onLlmTraceUpdate: (callback: (data: { kind: "upsert"; action: LlmTraceActionRecord } | { kind: "cleared"; sessionId: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on("llm-trace:update", subscription)
+    return () => {
+      ipcRenderer.removeListener("llm-trace:update", subscription)
+    }
+  },
+  onPromptLabFocusAction: (callback: (action: PromptLabActionId) => void) => {
+    const subscription = (_: any, action: PromptLabActionId) => callback(action)
+    ipcRenderer.on("prompt-lab:focus-action", subscription)
+    return () => {
+      ipcRenderer.removeListener("prompt-lab:focus-action", subscription)
+    }
+  },
+  logErrorToMain: (payload: RendererLogPayload) => sendRendererLog(payload),
   toggleWindow: () => ipcRenderer.invoke("toggle-window"),
   showWindow: () => ipcRenderer.invoke("show-window"),
   hideWindow: () => ipcRenderer.invoke("hide-window"),
@@ -490,14 +781,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string, modelId?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey, modelId),
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', config?: LlmProviderConfig) => ipcRenderer.invoke("test-llm-connection", provider, config),
   selectServiceAccount: () => ipcRenderer.invoke("select-service-account"),
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => ipcRenderer.invoke("set-gemini-api-key", apiKey),
   setGroqApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-api-key", apiKey),
   setOpenaiApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-api-key", apiKey),
+  setOpenaiProviderConfig: (config: LlmProviderConfig) => ipcRenderer.invoke("set-openai-provider-config", config),
   setClaudeApiKey: (apiKey: string) => ipcRenderer.invoke("set-claude-api-key", apiKey),
+  setAlibabaLlmProviderConfig: (config: LlmProviderConfig) => ipcRenderer.invoke("set-alibaba-llm-provider-config", config),
   getStoredCredentials: () => ipcRenderer.invoke("get-stored-credentials"),
 
   // STT Provider Management
@@ -564,6 +857,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener("native-audio-disconnected", subscription)
     }
   },
+  getLiveTranscriptState: () => ipcRenderer.invoke("live-transcript:get-state"),
+  editLiveTranscriptSegment: (payload: { id: string; text: string }) => ipcRenderer.invoke("live-transcript:edit-segment", payload),
+  mergeLiveTranscriptSegmentWithPrevious: (payload: { id: string }) => ipcRenderer.invoke("live-transcript:merge-with-previous", payload),
+  commitLiveTranscriptSegment: (payload?: { id?: string; speaker?: "interviewer" | "user" }) => ipcRenderer.invoke("live-transcript:commit-segment", payload),
+  resyncLiveTranscriptRag: () => ipcRenderer.invoke("live-transcript:resync-rag"),
+  onLiveTranscriptUpdate: (callback: (segments: LiveTranscriptSegment[]) => void) => {
+    const subscription = (_: any, data: LiveTranscriptSegment[]) => callback(data)
+    ipcRenderer.on("live-transcript-update", subscription)
+    return () => {
+      ipcRenderer.removeListener("live-transcript-update", subscription)
+    }
+  },
   onSuggestionGenerated: (callback: (data: { question: string; suggestion: string; confidence: number }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("suggestion-generated", subscription)
@@ -599,8 +904,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Intelligence Mode IPC
   generateAssist: () => ipcRenderer.invoke("generate-assist"),
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => ipcRenderer.invoke("generate-what-to-say", question, imagePaths),
-  generateFollowUp: (intent: string, userRequest?: string) => ipcRenderer.invoke("generate-follow-up", intent, userRequest),
+  generateWhatToSay: (question?: string, imagePaths?: string[], requestId?: string) => ipcRenderer.invoke("generate-what-to-say", question, imagePaths, requestId),
+  generateFollowUp: (intent: string, userRequest?: string, source?: { lane?: 'primary' | 'strong'; answer?: string; requestId?: string }) => ipcRenderer.invoke("generate-follow-up", intent, userRequest, source),
   generateFollowUpQuestions: () => ipcRenderer.invoke("generate-follow-up-questions"),
   generateRecap: () => ipcRenderer.invoke("generate-recap"),
   submitManualQuestion: (question: string) => ipcRenderer.invoke("submit-manual-question", question),
@@ -636,28 +941,35 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener("intelligence-assist-update", subscription)
     }
   },
-  onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => {
+  onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number; lane: 'primary' | 'strong'; requestId: string; modelId?: string; modelLabel?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer-token", subscription)
     return () => {
       ipcRenderer.removeListener("intelligence-suggested-answer-token", subscription)
     }
   },
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => {
+  onIntelligenceSuggestedAnswerStatus: (callback: (data: { status: 'started' | 'completed' | 'skipped' | 'error'; question: string; confidence: number; lane: 'primary' | 'strong'; requestId: string; modelId?: string; modelLabel?: string; message?: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on("intelligence-suggested-answer-status", subscription)
+    return () => {
+      ipcRenderer.removeListener("intelligence-suggested-answer-status", subscription)
+    }
+  },
+  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number; lane: 'primary' | 'strong'; requestId: string; modelId?: string; modelLabel?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer", subscription)
     return () => {
       ipcRenderer.removeListener("intelligence-suggested-answer", subscription)
     }
   },
-  onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => {
+  onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string; lane: 'primary' | 'strong'; requestId: string; modelId?: string; modelLabel?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-refined-answer-token", subscription)
     return () => {
       ipcRenderer.removeListener("intelligence-refined-answer-token", subscription)
     }
   },
-  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => {
+  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string; lane: 'primary' | 'strong'; requestId: string; modelId?: string; modelLabel?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-refined-answer", subscription)
     return () => {
@@ -730,7 +1042,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 
   // Streaming Chat
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean; traceContext?: LlmTraceActionContext }) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
   onGeminiStreamToken: (callback: (token: string) => void) => {
     const subscription = (_: any, token: string) => callback(token)
@@ -908,9 +1220,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   testReleaseFetch: () => ipcRenderer.invoke("test-release-fetch"),
 
   // RAG API
-  ragQueryMeeting: (meetingId: string, query: string) => ipcRenderer.invoke('rag:query-meeting', { meetingId, query }),
-  ragQueryLive: (query: string) => ipcRenderer.invoke('rag:query-live', { query }),
-  ragQueryGlobal: (query: string) => ipcRenderer.invoke('rag:query-global', { query }),
+  ragQueryMeeting: (meetingId: string, query: string, traceContext?: LlmTraceActionContext) => ipcRenderer.invoke('rag:query-meeting', { meetingId, query, traceContext }),
+  ragQueryLive: (query: string, traceContext?: LlmTraceActionContext) => ipcRenderer.invoke('rag:query-live', { query, traceContext }),
+  ragQueryGlobal: (query: string, traceContext?: LlmTraceActionContext) => ipcRenderer.invoke('rag:query-global', { query, traceContext }),
   ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => ipcRenderer.invoke('rag:cancel-query', options),
   ragIsMeetingProcessed: (meetingId: string) => ipcRenderer.invoke('rag:is-meeting-processed', meetingId),
   ragGetQueueStatus: () => ipcRenderer.invoke('rag:get-queue-status'),
@@ -995,8 +1307,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setGoogleSearchCseId: (cseId: string) => ipcRenderer.invoke('set-google-search-cse-id', cseId),
 
   // Dynamic Model Discovery
-  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
-  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
+  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', config: LlmProviderConfig) => ipcRenderer.invoke('fetch-provider-models', provider, config),
+  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
 
   // License Management
   licenseActivate: (key: string) => ipcRenderer.invoke('license:activate', key),

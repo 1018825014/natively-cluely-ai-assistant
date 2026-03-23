@@ -25,8 +25,8 @@ export interface SttProviderConfig {
 export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     google: {
         id: 'google',
-        name: 'Google Cloud (Default)',
-        description: 'Uses gRPC streaming via Google Cloud Service Account',
+        name: 'Google Cloud 语音识别',
+        description: '通过 Google Cloud 服务账号使用 gRPC 流式识别',
         endpoint: '', // Google uses gRPC, not REST
         model: '',
         authHeader: () => ({}),
@@ -34,14 +34,14 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     },
     groq: {
         id: 'groq',
-        name: 'Groq Whisper (Fast)',
-        description: 'Ultra-fast transcription via Groq API',
+        name: 'Groq Whisper（高速）',
+        description: '通过 Groq API 进行超高速转写',
         endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions',
         model: 'whisper-large-v3-turbo',
         uploadType: 'multipart',
         availableModels: [
-            { id: 'whisper-large-v3-turbo', label: 'Whisper Large V3 Turbo (Fastest)' },
-            { id: 'whisper-large-v3', label: 'Whisper Large V3 (Most Accurate)' },
+            { id: 'whisper-large-v3-turbo', label: 'Whisper Large V3 Turbo（最快）' },
+            { id: 'whisper-large-v3', label: 'Whisper Large V3（最准）' },
         ],
         authHeader: (apiKey: string) => ({
             Authorization: `Bearer ${apiKey}`,
@@ -56,7 +56,7 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     openai: {
         id: 'openai',
         name: 'OpenAI Whisper',
-        description: 'Transcription via OpenAI Whisper API',
+        description: '通过 OpenAI Whisper API 转写',
         endpoint: 'https://api.openai.com/v1/audio/transcriptions',
         model: 'whisper-1',
         uploadType: 'multipart',
@@ -68,7 +68,7 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     deepgram: {
         id: 'deepgram',
         name: 'Deepgram Nova-2',
-        description: 'Real-time streaming transcription via Deepgram WebSocket',
+        description: '通过 Deepgram WebSocket 进行实时流式转写',
         endpoint: 'wss://api.deepgram.com/v1/listen',
         model: 'nova-3',
         uploadType: 'websocket',
@@ -80,7 +80,7 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     elevenlabs: {
         id: 'elevenlabs',
         name: 'ElevenLabs Scribe',
-        description: 'Scribe v2 Realtime API',
+        description: 'Scribe v2 实时 API',
         endpoint: 'https://api.elevenlabs.io/v1/speech-to-text',
         model: 'scribe_v2',
         uploadType: 'multipart',
@@ -91,8 +91,8 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     },
     azure: {
         id: 'azure',
-        name: 'Azure Speech',
-        description: 'Microsoft Azure Cognitive Services STT',
+        name: 'Azure 语音',
+        description: 'Microsoft Azure Cognitive Services 语音转文字',
         endpoint: 'https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1',
         model: '',
         uploadType: 'binary',
@@ -104,7 +104,7 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     ibmwatson: {
         id: 'ibmwatson',
         name: 'IBM Watson',
-        description: 'IBM Watson Speech-to-Text cloud service',
+        description: 'IBM Watson 云端语音转文字服务',
         endpoint: 'https://api.{region}.speech-to-text.watson.cloud.ibm.com/v1/recognize',
         model: '',
         uploadType: 'binary',
@@ -116,7 +116,7 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     soniox: {
         id: 'soniox',
         name: 'Soniox',
-        description: 'Soniox realtime multi-language speech recognition',
+        description: 'Soniox 实时多语种语音识别',
         endpoint: 'wss://stt-rt.soniox.com/transcribe-websocket',
         model: 'stt-rt-v4',
         uploadType: 'websocket',
@@ -125,8 +125,8 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     },
     alibaba: {
         id: 'alibaba',
-        name: 'Alibaba Paraformer',
-        description: 'DashScope Paraformer realtime recognition via WebSocket',
+        name: '阿里云 Paraformer（默认）',
+        description: '通过 WebSocket 使用 DashScope Paraformer 实时识别',
         endpoint: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
         model: 'paraformer-realtime-v2',
         uploadType: 'websocket',
@@ -139,5 +139,5 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
 
 export const STT_PROVIDER_OPTIONS = Object.values(STT_PROVIDERS);
 
-export const DEFAULT_STT_PROVIDER: SttProviderId = 'google';
+export const DEFAULT_STT_PROVIDER: SttProviderId = 'alibaba';
 

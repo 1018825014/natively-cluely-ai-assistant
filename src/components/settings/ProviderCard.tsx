@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    Trash2,
     AlertCircle,
+    Check,
     CheckCircle,
+    ChevronDown,
     ExternalLink,
     Loader2,
-    ChevronDown,
-    Check,
-    RefreshCw
+    RefreshCw,
+    Trash2
 } from 'lucide-react';
 
 interface FetchedModel {
@@ -16,20 +16,24 @@ interface FetchedModel {
 }
 
 interface ProviderCardProps {
-    providerId: 'gemini' | 'groq' | 'openai' | 'claude';
+    providerId: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba';
     providerName: string;
     apiKey: string;
+    baseUrl?: string;
     preferredModel?: string;
     hasStoredKey: boolean;
     onKeyChange: (key: string) => void;
+    onBaseUrlChange?: (value: string) => void;
     onSaveKey: () => Promise<void>;
     onRemoveKey: () => void;
     onTestConnection: () => void;
     testStatus: 'idle' | 'testing' | 'success' | 'error';
     testError?: string;
+    diagnostics?: string[];
     savingStatus: boolean;
     savedStatus: boolean;
     keyPlaceholder: string;
+    baseUrlPlaceholder?: string;
     keyUrl: string;
     onPreferredModelChange?: (modelId: string) => void;
 }
@@ -38,17 +42,21 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
     providerId,
     providerName,
     apiKey,
+    baseUrl,
     preferredModel,
     hasStoredKey,
     onKeyChange,
+    onBaseUrlChange,
     onSaveKey,
     onRemoveKey,
     onTestConnection,
     testStatus,
     testError,
+    diagnostics,
     savingStatus,
     savedStatus,
     keyPlaceholder,
+    baseUrlPlaceholder,
     keyUrl,
     onPreferredModelChange,
 }) => {
@@ -61,20 +69,37 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 
     const savedRef = useRef(savedStatus);
     const savingRef = useRef(savingStatus);
+    const lastSavedSignatureRef = useRef('');
     savedRef.current = savedStatus;
     savingRef.current = savingStatus;
 
+    const configSignature = JSON.stringify({
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl?.trim() || '',
+    });
+
     useEffect(() => {
-        if (!apiKey.trim()) return;
+        if (savedStatus) {
+            lastSavedSignatureRef.current = configSignature;
+        }
+    }, [savedStatus, configSignature]);
+
+    useEffect(() => {
+        if (!apiKey.trim() && !baseUrl?.trim()) return;
+        if (configSignature === lastSavedSignatureRef.current) return;
 
         const timer = setTimeout(() => {
             if (!savedRef.current && !savingRef.current) {
-                onSaveKey().catch(console.error);
+                onSaveKey()
+                    .then(() => {
+                        lastSavedSignatureRef.current = configSignature;
+                    })
+                    .catch(console.error);
             }
         }, 5000);
 
         return () => clearTimeout(timer);
-    }, [apiKey, onSaveKey]);
+    }, [apiKey, baseUrl, configSignature, onSaveKey]);
 
     useEffect(() => {
         if (preferredModel) {
@@ -98,13 +123,15 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
         setFetchError(null);
 
         try {
-            if (apiKey.trim()) {
+            if (apiKey.trim() || baseUrl?.trim()) {
                 await onSaveKey();
             }
 
-            const keyToUse = apiKey.trim() || '';
             // @ts-ignore
-            const result = await window.electronAPI?.fetchProviderModels(providerId, keyToUse);
+            const result = await window.electronAPI?.fetchProviderModels(providerId, {
+                ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+                ...(baseUrl?.trim() ? { baseUrl: baseUrl.trim() } : {}),
+            });
 
             if (result?.success && result.models) {
                 setFetchedModels(result.models);
@@ -120,10 +147,10 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                     }
                 }
             } else {
-                setFetchError(result?.error || '拉取模型失败');
+                setFetchError(result?.error || '获取模型列表失败');
             }
         } catch (e: any) {
-            setFetchError(e.message || '拉取模型失败');
+            setFetchError(e.message || '获取模型列表失败');
         } finally {
             setIsFetching(false);
         }
@@ -148,7 +175,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
         <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
             <div className="mb-2 flex items-center justify-between">
                 <label className="flex items-center text-xs font-medium text-text-primary uppercase tracking-wide">
-                    {providerName} API Key
+                    {providerName} API 密钥
                     {hasStoredKey && <span className="ml-2 text-green-500 normal-case">已保存</span>}
                 </label>
                 <button
@@ -157,12 +184,24 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                         window.electronAPI?.openExternal(keyUrl);
                     }}
                     className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
-                    title={`获取 ${providerName} API Key`}
+                    title={`打开 ${providerName} 文档`}
                 >
-                    <span className="text-[10px] uppercase tracking-wide">获取 Key</span>
+                    <span className="text-[10px] uppercase tracking-wide">文档</span>
                     <ExternalLink size={12} />
                 </button>
             </div>
+
+            {onBaseUrlChange && (
+                <div className="mb-3">
+                    <input
+                        type="text"
+                        value={baseUrl || ''}
+                        onChange={(e) => onBaseUrlChange(e.target.value)}
+                        placeholder={baseUrlPlaceholder || 'https://api.example.com/v1'}
+                        className="w-full bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                    />
+                </div>
+            )}
 
             <div className="flex gap-2 mb-3">
                 <input
@@ -174,7 +213,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                 />
                 <button
                     onClick={onSaveKey}
-                    disabled={savingStatus || !apiKey.trim()}
+                    disabled={savingStatus || (!apiKey.trim() && !baseUrl?.trim())}
                     className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${
                         savedStatus
                             ? 'bg-green-500/20 text-green-400'
@@ -187,7 +226,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                     <button
                         onClick={onRemoveKey}
                         className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                        title="移除 API Key"
+                        title="删除 API 密钥"
                     >
                         <Trash2 size={16} strokeWidth={1.5} />
                     </button>
@@ -210,11 +249,11 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                     {testStatus === 'testing' ? <><Loader2 size={12} className="animate-spin" /> 测试中...</> :
                         testStatus === 'success' ? <><CheckCircle size={12} /> 已连接</> :
                             testStatus === 'error' ? <><AlertCircle size={12} /> 错误</> :
-                                <>{/* No Icon */} 测试连接</>}
+                                <>测试连接</>}
                 </button>
 
                 {fetchedModels.length > 0 || preferredModel ? (
-                    <div className="relative flex-1 max-w-[200px] mx-4" ref={dropdownRef}>
+                    <div className="relative flex-1 max-w-[220px] mx-4" ref={dropdownRef}>
                         <button
                             onClick={() => fetchedModels.length > 0 && setIsDropdownOpen(!isDropdownOpen)}
                             className={`w-full bg-bg-input border border-border-subtle rounded-md px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary flex items-center justify-between transition-colors ${
@@ -230,7 +269,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                         </button>
 
                         {isDropdownOpen && fetchedModels.length > 0 && (
-                            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-full min-w-[200px] bg-bg-elevated border border-border-subtle rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto animated fadeIn">
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-full min-w-[220px] bg-bg-elevated border border-border-subtle rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto animated fadeIn">
                                 <div className="p-1 space-y-0.5">
                                     {fetchedModels.map((model) => (
                                         <button
@@ -266,9 +305,9 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
                         }`}
                     >
                         {isFetching ? (
-                            <><Loader2 size={12} className="animate-spin" /> 获取中...</>
+                            <><Loader2 size={12} className="animate-spin" /> 加载中...</>
                         ) : (
-                            <><RefreshCw size={12} /> 拉取模型</>
+                            <><RefreshCw size={12} /> 获取模型</>
                         )}
                     </button>
                 ) : (
@@ -277,7 +316,16 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
             </div>
 
             {testError && <p className="text-[10px] text-red-400 mt-1.5 mb-2">{testError}</p>}
-            {fetchError && <p className="text-[10px] text-red-400 mt-1.5 mb-2">拉取模型失败：{fetchError}</p>}
+            {fetchError && <p className="text-[10px] text-red-400 mt-1.5 mb-2">{fetchError}</p>}
+            {!!diagnostics?.length && (
+                <div className="mt-3 rounded-lg border border-border-subtle bg-bg-input/60 px-3 py-2">
+                    {diagnostics.map((line) => (
+                        <p key={line} className="text-[10px] text-text-secondary leading-relaxed">
+                            {line}
+                        </p>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };

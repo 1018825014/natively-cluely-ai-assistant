@@ -92,6 +92,9 @@ export const AIProvidersSettings: React.FC = () => {
     const [groqApiKey, setGroqApiKey] = useState('');
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [claudeApiKey, setClaudeApiKey] = useState('');
+    const [alibabaApiKey, setAlibabaApiKey] = useState('');
+    const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
+    const [alibabaBaseUrl, setAlibabaBaseUrl] = useState('');
 
     // Status
     const [savedStatus, setSavedStatus] = useState<Record<string, boolean>>({});
@@ -100,6 +103,7 @@ export const AIProvidersSettings: React.FC = () => {
     const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({});
     const [testError, setTestError] = useState<Record<string, string>>({});
     const [customTestPreview, setCustomTestPreview] = useState<Record<string, CustomProviderTestPreview>>({});
+    const [providerDiagnostics, setProviderDiagnostics] = useState<Record<string, string[]>>({});
 
     // --- Custom Providers ---
     const [customProviders, setCustomProviders] = useState<CustomProvider[]>([]);
@@ -123,6 +127,22 @@ export const AIProvidersSettings: React.FC = () => {
     // --- Dynamic Model Discovery ---
     const [preferredModels, setPreferredModels] = useState<Record<string, string>>({});
 
+    const buildProviderConfig = (provider: string, key: string) => {
+        const trimmedKey = key.trim();
+        const trimmedBaseUrl = provider === 'openai'
+            ? openaiBaseUrl.trim()
+            : provider === 'alibaba'
+                ? alibabaBaseUrl.trim()
+                : '';
+        const preferredModel = (preferredModels[provider] || '').trim();
+
+        return {
+            ...(trimmedKey ? { apiKey: trimmedKey } : {}),
+            ...(trimmedBaseUrl ? { baseUrl: trimmedBaseUrl } : {}),
+            ...(preferredModel ? { preferredModel } : {}),
+        };
+    };
+
     // Load Initial Data
     useEffect(() => {
         const loadCredentials = async () => {
@@ -137,14 +157,18 @@ export const AIProvidersSettings: React.FC = () => {
                         gemini: creds.hasGeminiKey,
                         groq: creds.hasGroqKey,
                         openai: creds.hasOpenaiKey,
-                        claude: creds.hasClaudeKey
+                        claude: creds.hasClaudeKey,
+                        alibaba: creds.hasAlibabaLlmKey
                     });
+                    setOpenaiBaseUrl(creds.openaiBaseUrl || '');
+                    setAlibabaBaseUrl(creds.alibabaLlmBaseUrl || '');
                     // Load preferred models
                     const pm: Record<string, string> = {};
                     if (creds.geminiPreferredModel) pm.gemini = creds.geminiPreferredModel;
                     if (creds.groqPreferredModel) pm.groq = creds.groqPreferredModel;
                     if (creds.openaiPreferredModel) pm.openai = creds.openaiPreferredModel;
                     if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
+                    if (creds.alibabaPreferredModel) pm.alibaba = creds.alibabaPreferredModel;
                     setPreferredModels(pm);
                 }
 
@@ -263,24 +287,29 @@ export const AIProvidersSettings: React.FC = () => {
         }
     };
 
-    const handleSaveKey = async (provider: string, key: string, setter: (val: string) => void) => {
-        if (!key.trim()) return;
+    const handleSaveKey = async (provider: string, key: string, _setter: (val: string) => void) => {
+        if (!key.trim() && provider !== 'openai' && provider !== 'alibaba') return;
         setSavingStatus(prev => ({ ...prev, [provider]: true }));
         try {
             let result;
+            const providerConfig = buildProviderConfig(provider, key);
             // @ts-ignore
             if (provider === 'gemini') result = await window.electronAPI.setGeminiApiKey(key);
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey(key);
             // @ts-ignore
-            if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey(key);
+            if (provider === 'openai') result = await window.electronAPI.setOpenaiProviderConfig(providerConfig);
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey(key);
+            // @ts-ignore
+            if (provider === 'alibaba') result = await window.electronAPI.setAlibabaLlmProviderConfig(providerConfig);
 
             if (result && result.success) {
                 setSavedStatus(prev => ({ ...prev, [provider]: true }));
-                setHasStoredKey(prev => ({ ...prev, [provider]: true }));
-                setter('');
+                setHasStoredKey(prev => ({
+                    ...prev,
+                    [provider]: provider === 'openai' || provider === 'alibaba' ? (!!key.trim() || !!prev[provider]) : true
+                }));
                 setTimeout(() => setSavedStatus(prev => ({ ...prev, [provider]: false })), 2000);
             }
         } catch (e) {
@@ -291,7 +320,7 @@ export const AIProvidersSettings: React.FC = () => {
     };
 
     const handleRemoveKey = async (provider: string, setter: (val: string) => void) => {
-        if (!confirm(`确定要移除 ${provider} 的 API Key 吗？`)) return;
+        if (!confirm(`确定要移除 ${provider} 的 API 密钥吗？`)) return;
         try {
             let result;
             // @ts-ignore
@@ -299,9 +328,19 @@ export const AIProvidersSettings: React.FC = () => {
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey('');
             // @ts-ignore
-            if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey('');
+            if (provider === 'openai') result = await window.electronAPI.setOpenaiProviderConfig({
+                apiKey: '',
+                baseUrl: openaiBaseUrl,
+                preferredModel: preferredModels.openai
+            });
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey('');
+            // @ts-ignore
+            if (provider === 'alibaba') result = await window.electronAPI.setAlibabaLlmProviderConfig({
+                apiKey: '',
+                baseUrl: alibabaBaseUrl,
+                preferredModel: preferredModels.alibaba
+            });
 
             if (result && result.success) {
                 setHasStoredKey(prev => ({ ...prev, [provider]: false }));
@@ -321,17 +360,21 @@ export const AIProvidersSettings: React.FC = () => {
         setTestError(prev => ({ ...prev, [provider]: '' }));
 
         try {
+            const providerConfig = buildProviderConfig(provider, key);
             // @ts-ignore
-            const result = await window.electronAPI.testLlmConnection(provider, key);
+            const result = await window.electronAPI.testLlmConnection(provider, providerConfig);
             if (result.success) {
                 setTestStatus(prev => ({ ...prev, [provider]: 'success' }));
+                setProviderDiagnostics(prev => ({ ...prev, [provider]: result.diagnostics || [] }));
                 setTimeout(() => setTestStatus(prev => ({ ...prev, [provider]: 'idle' })), 3000);
             } else {
                 setTestStatus(prev => ({ ...prev, [provider]: 'error' }));
+                setProviderDiagnostics(prev => ({ ...prev, [provider]: result.diagnostics || [] }));
                 setTestError(prev => ({ ...prev, [provider]: result.error || '连接失败' }));
             }
         } catch (e: any) {
             setTestStatus(prev => ({ ...prev, [provider]: 'error' }));
+            setProviderDiagnostics(prev => ({ ...prev, [provider]: [] }));
             setTestError(prev => ({ ...prev, [provider]: e.message || '连接失败' }));
         }
     };
@@ -341,7 +384,8 @@ export const AIProvidersSettings: React.FC = () => {
             gemini: 'https://aistudio.google.com/app/apikey',
             groq: 'https://console.groq.com/keys',
             openai: 'https://platform.openai.com/api-keys',
-            claude: 'https://console.anthropic.com/settings/keys'
+            claude: 'https://console.anthropic.com/settings/keys',
+            alibaba: 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'
         };
         // @ts-ignore
         window.electronAPI?.openExternal(urls[provider]);
@@ -352,7 +396,7 @@ export const AIProvidersSettings: React.FC = () => {
     const handleTestCustomConnection = async (provider: CustomProvider, statusKey: string = getCustomProviderTestKey(provider.id)) => {
         const validation = validateCurl(provider.curlCommand);
         if (!validation.isValid) {
-            const errorMessage = validation.message || 'cURL 鍛戒护鏃犳晥銆?';
+            const errorMessage = validation.message || 'cURL 命令无效。';
             setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
             setTestError(prev => ({ ...prev, [statusKey]: errorMessage }));
             setCustomTestPreview(prev => ({ ...prev, [statusKey]: {} }));
@@ -366,7 +410,7 @@ export const AIProvidersSettings: React.FC = () => {
             // @ts-ignore
             const result = await window.electronAPI?.testCustomProviderConnection({
                 ...provider,
-                name: provider.name?.trim() || 'Custom Provider',
+                name: provider.name?.trim() || '自定义提供商',
                 curlCommand: provider.curlCommand.trim(),
                 responsePath: provider.responsePath?.trim() || '',
             });
@@ -381,11 +425,11 @@ export const AIProvidersSettings: React.FC = () => {
                 }, 3000);
             } else {
                 setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
-                setTestError(prev => ({ ...prev, [statusKey]: result?.error || '杩炴帴澶辫触' }));
+                setTestError(prev => ({ ...prev, [statusKey]: result?.error || '连接失败' }));
             }
         } catch (e: any) {
             setTestStatus(prev => ({ ...prev, [statusKey]: 'error' }));
-            setTestError(prev => ({ ...prev, [statusKey]: e.message || '杩炴帴澶辫触' }));
+            setTestError(prev => ({ ...prev, [statusKey]: e.message || '连接失败' }));
         }
     };
 
@@ -474,7 +518,7 @@ export const AIProvidersSettings: React.FC = () => {
             <div className="mt-3 rounded-xl border border-border-subtle bg-bg-item-surface overflow-hidden">
                 <div className="px-4 py-3 border-b border-border-subtle bg-bg-elevated/40 flex items-center justify-between gap-3">
                     <div>
-                        <p className="text-xs font-medium text-text-primary uppercase tracking-wide">Test Preview</p>
+                        <p className="text-xs font-medium text-text-primary uppercase tracking-wide">测试预览</p>
                         <p className="text-[10px] text-text-secondary mt-1">
                             {preview.method || 'POST'} {preview.status ? `· HTTP ${preview.status}` : ''}
                         </p>
@@ -489,7 +533,7 @@ export const AIProvidersSettings: React.FC = () => {
                 <div className="p-4 space-y-3">
                     {preview.requestUrl && (
                         <div>
-                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">Request URL</div>
+                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">请求地址</div>
                             <div className="max-h-20 overflow-auto rounded-lg bg-bg-input border border-border-subtle px-3 py-2 text-[11px] text-text-secondary font-mono break-all">
                                 {preview.requestUrl}
                             </div>
@@ -498,14 +542,14 @@ export const AIProvidersSettings: React.FC = () => {
 
                     {preview.extractedResponse && (
                         <div>
-                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">Extracted Response</div>
+                            <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-1">提取结果</div>
                             <pre className="max-h-40 overflow-auto rounded-lg bg-bg-input border border-border-subtle px-3 py-2 text-[11px] text-text-primary whitespace-pre-wrap break-words">{preview.extractedResponse}</pre>
                         </div>
                     )}
 
                     {preview.rawResponse && (
                         <details className="rounded-lg border border-border-subtle bg-bg-input/60 px-3 py-2">
-                            <summary className="cursor-pointer text-[11px] text-text-secondary select-none">Raw Response</summary>
+                            <summary className="cursor-pointer text-[11px] text-text-secondary select-none">原始响应</summary>
                             <pre className="mt-2 max-h-56 overflow-auto text-[11px] text-text-primary whitespace-pre-wrap break-words">{preview.rawResponse}</pre>
                         </details>
                     )}
@@ -559,7 +603,7 @@ export const AIProvidersSettings: React.FC = () => {
                 {/* Fast Response Mode */}
                 <div
                     className={`bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between ${!hasStoredKey.groq ? 'opacity-50 grayscale' : ''}`}
-                    title={!hasStoredKey.groq ? "需要先配置 Groq API Key" : ""}
+                    title={!hasStoredKey.groq ? "需要先配置 Groq API 密钥" : ""}
                 >
                     <div>
                         <div className="flex items-center gap-2">
@@ -568,13 +612,13 @@ export const AIProvidersSettings: React.FC = () => {
                         </div>
                         <p className="text-[10px] text-text-secondary mt-0.5">文本请求会优先使用 Groq Llama 3 获得更快回复；涉及多模态时仍会使用你的默认模型。</p>
                         {!hasStoredKey.groq && (
-                            <p className="text-[10px] text-orange-500 mt-0.5 font-medium">需要先在下方配置 Groq API Key。</p>
+                            <p className="text-[10px] text-orange-500 mt-0.5 font-medium">需要先在下方配置 Groq API 密钥。</p>
                         )}
                     </div>
                     <div
                         onClick={async () => {
                             if (!hasStoredKey.groq) {
-                                alert("请先配置 Groq API Key，再启用极速回复模式。");
+                                alert("请先配置 Groq API 密钥，再启用极速回复模式。");
                                 return;
                             }
                             const newState = !fastResponseMode;
@@ -594,7 +638,7 @@ export const AIProvidersSettings: React.FC = () => {
             <div className="space-y-5">
                 <div>
                     <h3 className="text-sm font-bold text-text-primary mb-1">云端提供商</h3>
-                    <p className="text-xs text-text-secondary mb-2">添加 API Key 以启用云端 AI 模型。</p>
+                    <p className="text-xs text-text-secondary mb-2">添加 API 密钥以启用云端 AI 模型。</p>
                 </div>
 
                 <div className="space-y-4">
@@ -644,19 +688,46 @@ export const AIProvidersSettings: React.FC = () => {
                         providerId="openai"
                         providerName="OpenAI"
                         apiKey={openaiApiKey}
+                        baseUrl={openaiBaseUrl}
                         preferredModel={preferredModels.openai}
                         hasStoredKey={!!hasStoredKey.openai}
                         onKeyChange={setOpenaiApiKey}
+                        onBaseUrlChange={setOpenaiBaseUrl}
                         onSaveKey={async () => { await handleSaveKey('openai', openaiApiKey, setOpenaiApiKey); }}
                         onRemoveKey={() => handleRemoveKey('openai', setOpenaiApiKey)}
                         onTestConnection={() => handleTestConnection('openai', openaiApiKey)}
                         testStatus={testStatus.openai || 'idle'}
                         testError={testError.openai}
+                        diagnostics={providerDiagnostics.openai}
                         savingStatus={!!savingStatus.openai}
                         savedStatus={!!savedStatus.openai}
                         keyPlaceholder="sk-..."
+                        baseUrlPlaceholder="https://api.openai.com/v1"
                         keyUrl="https://platform.openai.com/api-keys"
                         onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, openai: model }))}
+                    />
+
+                    <ProviderCard
+                        providerId="alibaba"
+                        providerName="阿里云 / 通义千问"
+                        apiKey={alibabaApiKey}
+                        baseUrl={alibabaBaseUrl}
+                        preferredModel={preferredModels.alibaba}
+                        hasStoredKey={!!hasStoredKey.alibaba}
+                        onKeyChange={setAlibabaApiKey}
+                        onBaseUrlChange={setAlibabaBaseUrl}
+                        onSaveKey={async () => { await handleSaveKey('alibaba', alibabaApiKey, setAlibabaApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('alibaba', setAlibabaApiKey)}
+                        onTestConnection={() => handleTestConnection('alibaba', alibabaApiKey)}
+                        testStatus={testStatus.alibaba || 'idle'}
+                        testError={testError.alibaba}
+                        diagnostics={providerDiagnostics.alibaba}
+                        savingStatus={!!savingStatus.alibaba}
+                        savedStatus={!!savedStatus.alibaba}
+                        keyPlaceholder="sk-..."
+                        baseUrlPlaceholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                        keyUrl="https://www.alibabacloud.com/help/en/model-studio/get-api-key"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, alibaba: model }))}
                     />
 
                     {/* Claude */}
@@ -799,7 +870,7 @@ export const AIProvidersSettings: React.FC = () => {
                             </div>
 
                             <div>
-                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">cURL Command</label>
+                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">cURL 命令</label>
                                 <div className="relative">
                                     <textarea
                                         value={customCurl}
@@ -905,7 +976,7 @@ export const AIProvidersSettings: React.FC = () => {
                                 <button
                                     onClick={() => handleTestCustomConnection({
                                         id: editingProvider?.id || 'draft',
-                                        name: customName || 'Custom Provider',
+                                        name: customName || '自定义提供商',
                                         curlCommand: customCurl,
                                         responsePath: customResponsePath
                                     }, customEditorTestKey)}
@@ -924,10 +995,10 @@ export const AIProvidersSettings: React.FC = () => {
                                             testStatus[customEditorTestKey] === 'error' ? <><AlertCircle size={14} /> 閿欒</> :
                                                 <>娴嬭瘯杩炴帴</>}
                                     */}
-                                    {testStatus[customEditorTestKey] === 'testing' ? <><Loader2 size={14} className="animate-spin" /> Testing...</> :
-                                        testStatus[customEditorTestKey] === 'success' ? <><CheckCircle size={14} /> Connected</> :
-                                            testStatus[customEditorTestKey] === 'error' ? <><AlertCircle size={14} /> Error</> :
-                                                <>Test Connection</>}
+                                    {testStatus[customEditorTestKey] === 'testing' ? <><Loader2 size={14} className="animate-spin" /> 测试中...</> :
+                                        testStatus[customEditorTestKey] === 'success' ? <><CheckCircle size={14} /> 已连接</> :
+                                            testStatus[customEditorTestKey] === 'error' ? <><AlertCircle size={14} /> 错误</> :
+                                                <>测试连接</>}
                                 </button>
                                 <button
                                     onClick={() => setIsEditingCustom(false)}
@@ -981,12 +1052,12 @@ export const AIProvidersSettings: React.FC = () => {
                                                         ? 'bg-red-500/10 text-red-400 border-red-500/20'
                                                         : 'bg-bg-input hover:bg-bg-elevated border-border-subtle text-text-primary'
                                             }`}
-                                            title={testError[getCustomProviderTestKey(provider.id)] || 'Test Connection'}
+                                            title={testError[getCustomProviderTestKey(provider.id)] || '测试连接'}
                                         >
-                                            {testStatus[getCustomProviderTestKey(provider.id)] === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
-                                                testStatus[getCustomProviderTestKey(provider.id)] === 'success' ? <><CheckCircle size={12} /> Connected</> :
-                                                    testStatus[getCustomProviderTestKey(provider.id)] === 'error' ? <><AlertCircle size={12} /> Error</> :
-                                                        <>Test Connection</>}
+                                            {testStatus[getCustomProviderTestKey(provider.id)] === 'testing' ? <><Loader2 size={12} className="animate-spin" /> 测试中...</> :
+                                                testStatus[getCustomProviderTestKey(provider.id)] === 'success' ? <><CheckCircle size={12} /> 已连接</> :
+                                                    testStatus[getCustomProviderTestKey(provider.id)] === 'error' ? <><AlertCircle size={12} /> 错误</> :
+                                                        <>测试连接</>}
                                         </button>
                                         <button
                                             onClick={() => handleEditProvider(provider)}

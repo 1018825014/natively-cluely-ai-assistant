@@ -11,6 +11,7 @@ import { EmbeddingPipeline } from './EmbeddingPipeline';
 import { RAGRetriever } from './RAGRetriever';
 import { LiveRAGIndexer } from './LiveRAGIndexer';
 import { buildRAGPrompt, NO_CONTEXT_FALLBACK, NO_GLOBAL_CONTEXT_FALLBACK } from './prompts';
+import { llmTraceRecorder } from '../services/LlmTraceRecorder';
 
 export interface RAGManagerConfig {
     db: Database.Database;
@@ -146,6 +147,24 @@ export class RAGManager {
         // Retrieve relevant context
         const context = await this.retriever.retrieve(query, { meetingId });
 
+        llmTraceRecorder.appendStep({
+            kind: 'rag',
+            stage: 'retrieval',
+            responseBody: {
+                scope: 'meeting',
+                meetingId,
+                query,
+                intent: context.intent,
+                chunkCount: context.chunks.length,
+                chunks: context.chunks.map(chunk => ({
+                    meetingId: chunk.meetingId,
+                    similarity: chunk.similarity,
+                    startMs: chunk.startMs,
+                    preview: chunk.text?.slice(0, 180) || '',
+                }))
+            }
+        });
+
         if (context.chunks.length === 0) {
             // No context relevant to query - trigger wrapper fallback to use context window
             throw new Error('NO_RELEVANT_CONTEXT_FOUND');
@@ -176,6 +195,24 @@ export class RAGManager {
 
         // Retrieve from all meetings
         const context = await this.retriever.retrieveGlobal(query);
+
+        llmTraceRecorder.appendStep({
+            kind: 'rag',
+            stage: 'retrieval',
+            responseBody: {
+                scope: 'global',
+                query,
+                intent: context.intent,
+                chunkCount: context.chunks.length,
+                meetingIds: context.meetingIds,
+                chunks: context.chunks.map(chunk => ({
+                    meetingId: chunk.meetingId,
+                    similarity: chunk.similarity,
+                    startMs: chunk.startMs,
+                    preview: chunk.text?.slice(0, 180) || '',
+                }))
+            }
+        });
 
         if (context.chunks.length === 0) {
             yield NO_GLOBAL_CONTEXT_FALLBACK;
@@ -263,6 +300,22 @@ export class RAGManager {
      */
     feedLiveTranscript(segments: RawSegment[]): void {
         this.liveIndexer.feedSegments(segments);
+    }
+
+    async resyncLiveTranscript(meetingId: string, segments: RawSegment[]): Promise<void> {
+        if (this.liveIndexer.getActiveMeetingId() !== meetingId) {
+            return;
+        }
+
+        this.vectorStore.deleteChunksForMeeting(meetingId);
+
+        try {
+            this.db.prepare('DELETE FROM embedding_queue WHERE meeting_id = ?').run(meetingId);
+        } catch (error) {
+            console.warn(`[RAGManager] Failed to clear embedding_queue for live resync ${meetingId}`, error);
+        }
+
+        await this.liveIndexer.rebuildFromSegments(segments);
     }
 
     /**

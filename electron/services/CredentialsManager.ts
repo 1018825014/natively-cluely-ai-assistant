@@ -12,6 +12,12 @@ import {
     parseTechnicalGlossaryText,
     normalizeTechnicalGlossaryConfig,
 } from '../stt/TechnicalGlossary';
+import {
+    getDefaultProviderModel,
+    normalizeOpenAICompatibleBaseUrl,
+    OpenAICompatibleProviderConfig,
+    OpenAICompatibleProviderId,
+} from './LlmProviderProfiles';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
@@ -33,7 +39,10 @@ export interface StoredCredentials {
     geminiApiKey?: string;
     groqApiKey?: string;
     openaiApiKey?: string;
+    openaiBaseUrl?: string;
     claudeApiKey?: string;
+    alibabaLlmApiKey?: string;
+    alibabaLlmBaseUrl?: string;
     googleServiceAccountPath?: string;
     customProviders?: CustomProvider[];
     curlProviders?: CurlProvider[];
@@ -62,6 +71,7 @@ export interface StoredCredentials {
     groqPreferredModel?: string;
     openaiPreferredModel?: string;
     claudePreferredModel?: string;
+    alibabaPreferredModel?: string;
 }
 
 export class CredentialsManager {
@@ -104,8 +114,38 @@ export class CredentialsManager {
         return this.credentials.openaiApiKey;
     }
 
+    public getOpenaiBaseUrl(): string {
+        return normalizeOpenAICompatibleBaseUrl('openai', this.credentials.openaiBaseUrl);
+    }
+
     public getClaudeApiKey(): string | undefined {
         return this.credentials.claudeApiKey;
+    }
+
+    public getAlibabaLlmApiKey(): string | undefined {
+        return this.credentials.alibabaLlmApiKey;
+    }
+
+    public getAlibabaLlmBaseUrl(): string {
+        return normalizeOpenAICompatibleBaseUrl('alibaba', this.credentials.alibabaLlmBaseUrl);
+    }
+
+    public getOpenAICompatibleProviderConfig(provider: OpenAICompatibleProviderId): OpenAICompatibleProviderConfig {
+        if (provider === 'openai') {
+            return {
+                apiKey: this.credentials.openaiApiKey,
+                baseUrl: this.getOpenaiBaseUrl(),
+                preferredModel: this.credentials.openaiPreferredModel || getDefaultProviderModel('openai'),
+                fastModel: getDefaultProviderModel('openai', 'fast'),
+            };
+        }
+
+        return {
+            apiKey: this.credentials.alibabaLlmApiKey,
+            baseUrl: this.getAlibabaLlmBaseUrl(),
+            preferredModel: this.credentials.alibabaPreferredModel || getDefaultProviderModel('alibaba'),
+            fastModel: getDefaultProviderModel('alibaba', 'fast'),
+        };
     }
 
     public getGoogleServiceAccountPath(): string | undefined {
@@ -118,7 +158,7 @@ export class CredentialsManager {
 
     public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba' {
         const envProvider = process.env.NATIVELY_STT_PROVIDER as StoredCredentials['sttProvider'] | undefined;
-        return envProvider || this.credentials.sttProvider || 'google';
+        return envProvider || this.credentials.sttProvider || 'alibaba';
     }
 
     public getDeepgramApiKey(): string | undefined {
@@ -183,6 +223,7 @@ export class CredentialsManager {
             ...envConfig,
             alibabaWorkspaceId: process.env.NATIVELY_ALIBABA_WORKSPACE_ID || envConfig.alibabaWorkspaceId,
             alibabaVocabularyId: process.env.NATIVELY_ALIBABA_VOCABULARY_ID || envConfig.alibabaVocabularyId,
+            funAsrVocabularyId: process.env.NATIVELY_FUN_ASR_VOCABULARY_ID || envConfig.funAsrVocabularyId,
         });
     }
 
@@ -202,7 +243,16 @@ export class CredentialsManager {
         return this.credentials.aiResponseLanguage || 'English';
     }
     public getDefaultModel(): string {
-        return this.credentials.defaultModel || 'gemini-3.1-flash-lite-preview';
+        if (this.credentials.defaultModel?.trim()) {
+            return this.credentials.defaultModel;
+        }
+        if (this.credentials.openaiApiKey?.trim()) {
+            return this.credentials.openaiPreferredModel || getDefaultProviderModel('openai');
+        }
+        if (this.credentials.alibabaLlmApiKey?.trim()) {
+            return this.credentials.alibabaPreferredModel || getDefaultProviderModel('alibaba');
+        }
+        return 'gemini-3.1-flash-lite-preview';
     }
 
     public getAllCredentials(): StoredCredentials {
@@ -231,10 +281,30 @@ export class CredentialsManager {
         console.log('[CredentialsManager] OpenAI API Key updated');
     }
 
+    public setOpenaiProviderConfig(config: OpenAICompatibleProviderConfig): void {
+        if (config.apiKey !== undefined) this.credentials.openaiApiKey = config.apiKey;
+        if (config.baseUrl !== undefined) {
+            this.credentials.openaiBaseUrl = normalizeOpenAICompatibleBaseUrl('openai', config.baseUrl);
+        }
+        if (config.preferredModel !== undefined) this.credentials.openaiPreferredModel = config.preferredModel;
+        this.saveCredentials();
+        console.log('[CredentialsManager] OpenAI provider config updated');
+    }
+
     public setClaudeApiKey(key: string): void {
         this.credentials.claudeApiKey = key;
         this.saveCredentials();
         console.log('[CredentialsManager] Claude API Key updated');
+    }
+
+    public setAlibabaLlmProviderConfig(config: OpenAICompatibleProviderConfig): void {
+        if (config.apiKey !== undefined) this.credentials.alibabaLlmApiKey = config.apiKey;
+        if (config.baseUrl !== undefined) {
+            this.credentials.alibabaLlmBaseUrl = normalizeOpenAICompatibleBaseUrl('alibaba', config.baseUrl);
+        }
+        if (config.preferredModel !== undefined) this.credentials.alibabaPreferredModel = config.preferredModel;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Alibaba LLM provider config updated');
     }
 
     public setGoogleServiceAccountPath(filePath: string): void {
@@ -350,12 +420,12 @@ export class CredentialsManager {
         console.log(`[CredentialsManager] Default Model set to: ${model}`);
     }
 
-    public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude'): string | undefined {
+    public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba'): string | undefined {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         return this.credentials[key] as string | undefined;
     }
 
-    public setPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string): void {
+    public setPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', modelId: string): void {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         (this.credentials as any)[key] = modelId;
         this.saveCredentials();

@@ -44,9 +44,9 @@ export class ErrorBoundary extends Component<Props, State> {
             window.electronAPI?.logErrorToMain?.({
                 type: 'uncaught-render-error',
                 context,
-                message: error?.message,
-                stack: error?.stack,
-                componentStack: info.componentStack
+                message: error?.message ?? undefined,
+                stack: error?.stack ?? undefined,
+                componentStack: info.componentStack || undefined
             });
         } catch { /* analytics must never crash the handler */ }
     }
@@ -65,7 +65,7 @@ export class ErrorBoundary extends Component<Props, State> {
             return this.props.children;
         }
 
-        const context = this.props.context ?? 'Application';
+        const context = this.props.context ?? '应用';
 
         return (
             <div
@@ -86,7 +86,7 @@ export class ErrorBoundary extends Component<Props, State> {
             >
                 <AlertTriangle size={36} color="#ff4444" style={{ marginBottom: '4px' }} />
                 <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#fff' }}>
-                    {context} crashed
+                    {context} 出现异常
                 </h2>
                 <p style={{ margin: 0, fontSize: '12px', color: '#888', maxWidth: '320px', lineHeight: 1.5 }}>
                     发生了意外错误。你的数据仍然安全，点击下方即可恢复。

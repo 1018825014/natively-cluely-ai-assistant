@@ -3,7 +3,7 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     ids: string[];
     names: string[];
     descs: string[];
-    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel';
+    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel' | 'alibabaPreferredModel';
 }> = {
     gemini: {
         hasKeyCheck: (creds) => !!creds?.hasGeminiKey,
@@ -14,10 +14,17 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     },
     openai: {
         hasKeyCheck: (creds) => !!creds?.hasOpenaiKey,
-        ids: ['gpt-5.4'],
-        names: ['GPT 5.4'],
-        descs: ['OpenAI'],
+        ids: ['gpt-5.4', 'gpt-5.4-mini'],
+        names: ['GPT 5.4', 'GPT 5.4 Mini'],
+        descs: ['Reasoning', 'Fast'],
         pmKey: 'openaiPreferredModel'
+    },
+    alibaba: {
+        hasKeyCheck: (creds) => !!creds?.hasAlibabaLlmKey,
+        ids: ['qwen3.5-plus', 'qwen3.5-flash'],
+        names: ['Qwen 3.5 Plus', 'Qwen 3.5 Flash'],
+        descs: ['Reasoning', 'Fast'],
+        pmKey: 'alibabaPreferredModel'
     },
     claude: {
         hasKeyCheck: (creds) => !!creds?.hasClaudeKey,

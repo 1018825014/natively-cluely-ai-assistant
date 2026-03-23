@@ -3,8 +3,9 @@
 // Extracted from IntelligenceManager to decouple LLM logic from state management.
 
 import { EventEmitter } from 'events';
-import { LLMHelper } from './LLMHelper';
+import { LLMHelper, StreamChatRouteInfo } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
+import { llmTraceRecorder } from './services/LlmTraceRecorder';
 import {
     AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
     FollowUpQuestionsLLM, WhatToAnswerLLM,
@@ -14,6 +15,49 @@ import {
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions';
+export type RecommendationLane = 'primary' | 'strong';
+
+export interface RecommendationEventMeta {
+    lane: RecommendationLane;
+    requestId: string;
+    modelId?: string;
+    modelLabel?: string;
+}
+
+export interface SuggestedAnswerTokenPayload extends RecommendationEventMeta {
+    token: string;
+    question: string;
+    confidence: number;
+}
+
+export interface SuggestedAnswerPayload extends RecommendationEventMeta {
+    answer: string;
+    question: string;
+    confidence: number;
+}
+
+export interface SuggestedAnswerStatusPayload extends RecommendationEventMeta {
+    status: 'started' | 'completed' | 'skipped' | 'error';
+    question: string;
+    confidence: number;
+    message?: string;
+}
+
+export interface RefinedAnswerTokenPayload extends RecommendationEventMeta {
+    token: string;
+    intent: string;
+}
+
+export interface RefinedAnswerPayload extends RecommendationEventMeta {
+    answer: string;
+    intent: string;
+}
+
+export interface FollowUpSource {
+    lane?: RecommendationLane;
+    answer?: string;
+    requestId?: string;
+}
 
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
@@ -41,10 +85,11 @@ function detectRefinementIntent(userText: string): { isRefinement: boolean; inte
 // Events emitted by IntelligenceEngine
 export interface IntelligenceModeEvents {
     'assist_update': (insight: string) => void;
-    'suggested_answer': (answer: string, question: string, confidence: number) => void;
-    'suggested_answer_token': (token: string, question: string, confidence: number) => void;
-    'refined_answer': (answer: string, intent: string) => void;
-    'refined_answer_token': (token: string, intent: string) => void;
+    'suggested_answer': (payload: SuggestedAnswerPayload) => void;
+    'suggested_answer_token': (payload: SuggestedAnswerTokenPayload) => void;
+    'suggested_answer_status': (payload: SuggestedAnswerStatusPayload) => void;
+    'refined_answer': (payload: RefinedAnswerPayload) => void;
+    'refined_answer_token': (payload: RefinedAnswerTokenPayload) => void;
     'recap': (summary: string) => void;
     'recap_token': (token: string) => void;
     'follow_up_questions_update': (questions: string) => void;
@@ -88,6 +133,23 @@ export class IntelligenceEngine extends EventEmitter {
 
     getLLMHelper(): LLMHelper {
         return this.llmHelper;
+    }
+
+    private createRecommendationRequestId(): string {
+        return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    private toRecommendationMeta(
+        lane: RecommendationLane,
+        requestId: string,
+        route?: StreamChatRouteInfo | null
+    ): RecommendationEventMeta {
+        return {
+            lane,
+            requestId,
+            modelId: route?.modelId,
+            modelLabel: route?.modelLabel,
+        };
     }
 
     getRecapLLM(): RecapLLM | null {
@@ -209,8 +271,16 @@ export class IntelligenceEngine extends EventEmitter {
      * Manual trigger - uses clean transcript pipeline for question inference
      * NEVER returns null - always provides a usable response
      */
-    async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
+    async runWhatShouldISay(
+        question?: string,
+        confidence: number = 0.8,
+        imagePaths?: string[],
+        requestId?: string
+    ): Promise<string | null> {
         const now = Date.now();
+        const fallbackAnswer = "Could you repeat that? I want to make sure I address your question properly.";
+        const displayQuestion = question || 'What to Answer';
+        const effectiveRequestId = requestId || this.createRecommendationRequestId();
 
         if (now - this.lastTriggerTime < this.triggerCooldown) {
             return null;
@@ -225,24 +295,69 @@ export class IntelligenceEngine extends EventEmitter {
         this.lastTriggerTime = now;
 
         try {
+            const primaryInitialRoute = this.llmHelper.getInitialStreamChatRouteInfo(imagePaths) || this.llmHelper.getCurrentModelRouteInfo();
+            const strongInitialRoute = this.llmHelper.getCurrentModelRouteInfo();
+            const shouldSkipStrong = this.llmHelper.shouldSkipParallelStrongAnswer(imagePaths);
+
+            this.emit('suggested_answer_status', {
+                status: 'started',
+                question: displayQuestion,
+                confidence,
+                ...this.toRecommendationMeta('primary', effectiveRequestId, primaryInitialRoute),
+            });
+
+            if (shouldSkipStrong) {
+                this.emit('suggested_answer_status', {
+                    status: 'skipped',
+                    question: displayQuestion,
+                    confidence,
+                    message: 'Primary lane is already using the current default model.',
+                    ...this.toRecommendationMeta('strong', effectiveRequestId, strongInitialRoute),
+                });
+            } else {
+                this.emit('suggested_answer_status', {
+                    status: 'started',
+                    question: displayQuestion,
+                    confidence,
+                    ...this.toRecommendationMeta('strong', effectiveRequestId, strongInitialRoute),
+                });
+            }
+
             if (!this.whatToAnswerLLM) {
-                if (!this.answerLLM) {
-                    this.setMode('idle');
-                    return "Please configure your API Keys in Settings to use this feature.";
+                const fallbackConfiguredAnswer = !this.answerLLM
+                    ? "Please configure your API Keys in Settings to use this feature."
+                    : await this.answerLLM.generate(question || '', this.session.getFormattedContext(180));
+
+                if (!shouldSkipStrong) {
+                    this.emit('suggested_answer_status', {
+                        status: 'skipped',
+                        question: displayQuestion,
+                        confidence,
+                        message: 'Strong-model lane is unavailable in legacy answer mode.',
+                        ...this.toRecommendationMeta('strong', effectiveRequestId, strongInitialRoute),
+                    });
                 }
-                const context = this.session.getFormattedContext(180);
-                const answer = await this.answerLLM.generate(question || '', context);
-                if (answer) {
-                    this.session.addAssistantMessage(answer);
-                    this.emit('suggested_answer', answer, question || 'inferred', confidence);
-                }
+
+                const primaryAnswer = fallbackConfiguredAnswer || fallbackAnswer;
+                this.session.addAssistantMessage(primaryAnswer);
+                this.emit('suggested_answer', {
+                    answer: primaryAnswer,
+                    question: displayQuestion,
+                    confidence,
+                    ...this.toRecommendationMeta('primary', effectiveRequestId, primaryInitialRoute),
+                });
+                this.emit('suggested_answer_status', {
+                    status: 'completed',
+                    question: displayQuestion,
+                    confidence,
+                    ...this.toRecommendationMeta('primary', effectiveRequestId, primaryInitialRoute),
+                });
                 this.setMode('idle');
-                return answer || "Could you repeat that? I want to make sure I address your question properly.";
+                return primaryAnswer;
             }
 
             const contextItems = this.session.getContext(180);
 
-            // Inject latest interim transcript if available
             const lastInterim = this.session.getLastInterimInterviewer();
             if (lastInterim && lastInterim.text.trim().length > 0) {
                 const lastItem = contextItems[contextItems.length - 1];
@@ -283,36 +398,109 @@ export class IntelligenceEngine extends EventEmitter {
 
             console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
-            let fullAnswer = "";
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
+            const runLane = async (
+                lane: RecommendationLane,
+                options: { disableFastPath: boolean; initialRoute: StreamChatRouteInfo }
+            ): Promise<string | null> => {
+                return llmTraceRecorder.runWithScope({ lane, stage: 'what_to_answer' }, async () => {
+                    let fullAnswer = "";
+                    let latestRoute = options.initialRoute;
 
-            for await (const token of stream) {
-                this.emit('suggested_answer_token', token, question || 'inferred', confidence);
-                fullAnswer += token;
+                    try {
+                        const stream = this.whatToAnswerLLM!.generateStream(
+                            preparedTranscript,
+                            temporalContext,
+                            intentResult,
+                            imagePaths,
+                            {
+                                disableFastPath: options.disableFastPath,
+                                onRouteSelected: (route) => {
+                                    latestRoute = route;
+                                }
+                            }
+                        );
+
+                        for await (const token of stream) {
+                            this.emit('suggested_answer_token', {
+                                token,
+                                question: displayQuestion,
+                                confidence,
+                                ...this.toRecommendationMeta(lane, effectiveRequestId, latestRoute),
+                            });
+                            fullAnswer += token;
+                        }
+                    } catch (laneError: any) {
+                        console.warn(`[IntelligenceEngine] ${lane} lane failed: ${laneError.message}`);
+                        if (lane === 'primary') {
+                            fullAnswer = fallbackAnswer;
+                        } else {
+                            this.emit('suggested_answer_status', {
+                                status: 'error',
+                                question: displayQuestion,
+                                confidence,
+                                message: laneError.message,
+                                ...this.toRecommendationMeta(lane, effectiveRequestId, latestRoute),
+                            });
+                            return null;
+                        }
+                    }
+
+                    if (!fullAnswer || fullAnswer.trim().length < 5) {
+                        if (lane === 'primary') {
+                            fullAnswer = fallbackAnswer;
+                        } else {
+                            this.emit('suggested_answer_status', {
+                                status: 'error',
+                                question: displayQuestion,
+                                confidence,
+                                message: 'No strong-model answer was generated.',
+                                ...this.toRecommendationMeta(lane, effectiveRequestId, latestRoute),
+                            });
+                            return null;
+                        }
+                    }
+
+                    this.emit('suggested_answer', {
+                        answer: fullAnswer,
+                        question: displayQuestion,
+                        confidence,
+                        ...this.toRecommendationMeta(lane, effectiveRequestId, latestRoute),
+                    });
+                    this.emit('suggested_answer_status', {
+                        status: 'completed',
+                        question: displayQuestion,
+                        confidence,
+                        ...this.toRecommendationMeta(lane, effectiveRequestId, latestRoute),
+                    });
+
+                    return fullAnswer;
+                });
+            };
+
+            const [primaryAnswer, strongAnswer] = await Promise.all([
+                runLane('primary', { disableFastPath: false, initialRoute: primaryInitialRoute }),
+                shouldSkipStrong
+                    ? Promise.resolve<string | null>(null)
+                    : runLane('strong', { disableFastPath: true, initialRoute: strongInitialRoute }),
+            ]);
+
+            if (primaryAnswer && primaryAnswer !== fallbackAnswer) {
+                this.session.addAssistantMessage(primaryAnswer);
+                this.session.pushUsage({
+                    type: 'assist',
+                    timestamp: Date.now(),
+                    question: displayQuestion,
+                    answer: primaryAnswer
+                });
             }
-
-            if (!fullAnswer || fullAnswer.trim().length < 5) {
-                fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
-            }
-
-            this.session.addAssistantMessage(fullAnswer);
-
-            this.session.pushUsage({
-                type: 'assist',
-                timestamp: Date.now(),
-                question: question || 'What to Answer',
-                answer: fullAnswer
-            });
-
-            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
 
             this.setMode('idle');
-            return fullAnswer;
+            return primaryAnswer || strongAnswer || fallbackAnswer;
 
         } catch (error) {
             this.emit('error', error as Error, 'what_to_say');
             this.setMode('idle');
-            return "Could you repeat that? I want to make sure I address your question properly.";
+            return fallbackAnswer;
         }
     }
 
@@ -320,9 +508,11 @@ export class IntelligenceEngine extends EventEmitter {
      * MODE 3: Follow-Up (Refinement)
      * Modify the last assistant message
      */
-    async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
+    async runFollowUp(intent: string, userRequest?: string, source?: FollowUpSource): Promise<string | null> {
         console.log(`[IntelligenceEngine] runFollowUp called with intent: ${intent}`);
-        const lastMsg = this.session.getLastAssistantMessage();
+        const lane = source?.lane || 'primary';
+        const requestId = source?.requestId || this.createRecommendationRequestId();
+        const lastMsg = source?.answer || this.session.getLastAssistantMessage();
         if (!lastMsg) {
             console.warn('[IntelligenceEngine] No lastAssistantMessage found for follow-up');
             return null;
@@ -339,22 +529,43 @@ export class IntelligenceEngine extends EventEmitter {
 
             const context = this.session.getFormattedContext(60);
             const refinementRequest = userRequest || intent;
+            let latestRoute = this.llmHelper.getInitialStreamChatRouteInfo(undefined, {
+                disableFastPath: lane === 'strong',
+            }) || this.llmHelper.getCurrentModelRouteInfo();
 
             let fullRefined = "";
-            const stream = this.followUpLLM.generateStream(
-                lastMsg,
-                refinementRequest,
-                context
-            );
+            await llmTraceRecorder.runWithScope({ lane, stage: 'follow_up' }, async () => {
+                const stream = this.followUpLLM.generateStream(
+                    lastMsg,
+                    refinementRequest,
+                    context,
+                    {
+                        disableFastPath: lane === 'strong',
+                        onRouteSelected: (route) => {
+                            latestRoute = route;
+                        }
+                    }
+                );
 
-            for await (const token of stream) {
-                this.emit('refined_answer_token', token, intent);
-                fullRefined += token;
-            }
+                for await (const token of stream) {
+                    this.emit('refined_answer_token', {
+                        token,
+                        intent,
+                        ...this.toRecommendationMeta(lane, requestId, latestRoute),
+                    });
+                    fullRefined += token;
+                }
+            });
 
             if (fullRefined) {
-                this.session.addAssistantMessage(fullRefined);
-                this.emit('refined_answer', fullRefined, intent);
+                if (lane === 'primary') {
+                    this.session.addAssistantMessage(fullRefined);
+                }
+                this.emit('refined_answer', {
+                    answer: fullRefined,
+                    intent,
+                    ...this.toRecommendationMeta(lane, requestId, latestRoute),
+                });
 
                 const intentMap: Record<string, string> = {
                     'shorten': 'Shorten Answer',
@@ -369,12 +580,14 @@ export class IntelligenceEngine extends EventEmitter {
 
                 const displayQuestion = userRequest || intentMap[intent] || `Refining: ${intent}`;
 
-                this.session.pushUsage({
-                    type: 'followup',
-                    timestamp: Date.now(),
-                    question: displayQuestion,
-                    answer: fullRefined
-                });
+                if (lane === 'primary') {
+                    this.session.pushUsage({
+                        type: 'followup',
+                        timestamp: Date.now(),
+                        question: displayQuestion,
+                        answer: fullRefined
+                    });
+                }
             }
 
             this.setMode('idle');
@@ -410,12 +623,14 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             let fullSummary = "";
-            const stream = this.recapLLM.generateStream(context);
+            await llmTraceRecorder.runWithScope({ stage: 'recap' }, async () => {
+                const stream = this.recapLLM.generateStream(context);
 
-            for await (const token of stream) {
-                this.emit('recap_token', token);
-                fullSummary += token;
-            }
+                for await (const token of stream) {
+                    this.emit('recap_token', token);
+                    fullSummary += token;
+                }
+            });
 
             if (fullSummary) {
                 this.emit('recap', fullSummary);
@@ -460,12 +675,14 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             let fullQuestions = "";
-            const stream = this.followUpQuestionsLLM.generateStream(context);
+            await llmTraceRecorder.runWithScope({ stage: 'follow_up_questions' }, async () => {
+                const stream = this.followUpQuestionsLLM.generateStream(context);
 
-            for await (const token of stream) {
-                this.emit('follow_up_questions_token', token);
-                fullQuestions += token;
-            }
+                for await (const token of stream) {
+                    this.emit('follow_up_questions_token', token);
+                    fullQuestions += token;
+                }
+            });
 
             if (fullQuestions) {
                 this.emit('follow_up_questions_update', fullQuestions);

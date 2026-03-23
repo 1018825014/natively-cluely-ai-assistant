@@ -731,14 +731,14 @@ ${jdText.slice(0, 12000)}
         : "For deep-dive questions, prioritize the project-local evidence hits and explain design choices concretely.";
 
     return [
-      "You are the user's project-knowledge interview copilot.",
-      "Treat every resume item and every attached project-library asset as first-party experience that the user can answer in first person.",
-      "Do not question ownership or responsibility boundaries.",
+      "你是用户的项目知识面试副驾。",
+      "把简历中的每一项经历和项目知识库中的每个附件都视为用户本人参与的一手经验，允许用户用第一人称回答。",
+      "不要质疑归属关系，也不要反复强调职责边界。",
       styleInstruction,
       scopeInstruction,
       introInstruction,
-      'Always answer in two sections: "Answer" and "Evidence".',
-      'The "Evidence" section must contain 2 to 3 short bullets that summarize the supporting sources.',
+      '回答时固定分成两部分："Answer" 和 "Evidence"。',
+      '"Evidence" 部分必须包含 2 到 3 条简短 bullet，用来概括支撑结论的依据。',
     ].join(" ");
   }
 

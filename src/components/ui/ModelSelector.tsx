@@ -13,6 +13,14 @@ interface CustomProvider {
     curlCommand: string;
 }
 
+const CLOUD_PROVIDER_LABELS: Record<string, string> = {
+    gemini: "Gemini",
+    groq: "Groq",
+    openai: "OpenAI",
+    claude: "Claude",
+    alibaba: "阿里云",
+};
+
 export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSelectModel }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'cloud' | 'custom' | 'local'>('cloud');
@@ -68,7 +76,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                         nextCloudModels.push({
                             id: preferredModel,
                             name: prettifyModelId(preferredModel),
-                            desc: `${prov.charAt(0).toUpperCase() + prov.slice(1)} 首选`,
+                            desc: `${CLOUD_PROVIDER_LABELS[prov] || prov} 首选`,
                             provider: prov,
                         });
                     }
@@ -144,7 +152,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                                 {cloudModels.length === 0 ? (
                                     <div className="text-center py-6 text-text-tertiary">
                                         <p className="text-xs mb-2">还没有配置云端提供商。</p>
-                                        <p className="text-[10px] opacity-70">去设置里添加 API Key。</p>
+                                        <p className="text-[10px] opacity-70">去设置里添加 API 密钥。</p>
                                     </div>
                                 ) : (
                                     cloudModels.map((model, idx) => {

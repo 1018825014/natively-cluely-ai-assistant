@@ -8,6 +8,7 @@ export interface TechnicalGlossaryConfig {
     entries: TechnicalTermEntry[];
     alibabaWorkspaceId?: string;
     alibabaVocabularyId?: string;
+    funAsrVocabularyId?: string;
     updatedAt?: string;
 }
 
@@ -48,6 +49,7 @@ export function normalizeTechnicalGlossaryConfig(
         entries: entries.length > 0 ? entries : DEFAULT_TECHNICAL_GLOSSARY.entries,
         alibabaWorkspaceId: config?.alibabaWorkspaceId?.trim() || undefined,
         alibabaVocabularyId: config?.alibabaVocabularyId?.trim() || undefined,
+        funAsrVocabularyId: config?.funAsrVocabularyId?.trim() || undefined,
         updatedAt: config?.updatedAt || new Date().toISOString(),
     };
 }

@@ -79,12 +79,12 @@ export class LiveRAGIndexer {
      * 5. Embed each chunk via Gemini API
      * 6. Advance high-water mark
      */
-    private async tick(): Promise<void> {
+    private async tick(force: boolean = false): Promise<void> {
         if (!this.isActive || !this.meetingId) return;
         if (this.isProcessing) return;  // Skip if previous tick still running
 
         const newSegmentCount = this.allSegments.length - this.indexedSegmentCount;
-        if (newSegmentCount < MIN_NEW_SEGMENTS) return;  // Not enough new content
+        if (!force && newSegmentCount < MIN_NEW_SEGMENTS) return;  // Not enough new content
 
         this.isProcessing = true;
         const meetingId = this.meetingId;
@@ -201,5 +201,14 @@ export class LiveRAGIndexer {
      */
     isRunning(): boolean {
         return this.isActive;
+    }
+
+    async rebuildFromSegments(segments: RawSegment[]): Promise<void> {
+        if (!this.isActive || !this.meetingId) return;
+        this.allSegments = [...segments];
+        this.indexedSegmentCount = 0;
+        this.chunkCounter = 0;
+        this.indexedChunkCount = 0;
+        await this.tick(true);
     }
 }

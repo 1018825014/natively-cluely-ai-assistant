@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import {
     Sparkles,
     Pencil,
@@ -8,7 +8,9 @@ import {
     ArrowUp,
     ArrowRight,
     HelpCircle,
+    ChevronLeft,
     ChevronUp,
+    ChevronRight,
     ChevronDown,
 
     CornerDownLeft,
@@ -17,6 +19,8 @@ import {
     Image,
     Camera,
     X,
+    FolderOpen,
+    Trash2,
     LogOut,
     Zap,
     Edit3,
@@ -32,7 +36,6 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 // import { ModelSelector } from './ui/ModelSelector'; // REMOVED
 import TopPill from './ui/TopPill';
-import RollingTranscript from './ui/RollingTranscript';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -51,22 +54,49 @@ interface Message {
     screenshotPreview?: string;
     isCode?: boolean;
     intent?: string;
+    lane?: 'primary' | 'strong';
+    requestId?: string;
+    modelId?: string;
+    modelLabel?: string;
+    liveTranscriptSegmentId?: string;
+    edited?: boolean;
+    transcriptStatus?: 'active' | 'final';
 }
 
-interface InterviewerDraft {
+type RecommendationLane = 'primary' | 'strong';
+type WhatToAnswerLaneStatus = 'idle' | 'started' | 'streaming' | 'completed' | 'skipped' | 'error';
+
+interface RecommendationLaneState {
+    requestId: string | null;
+    status: WhatToAnswerLaneStatus;
+    modelId?: string;
+    modelLabel?: string;
+    message?: string;
+}
+
+interface WhatToAnswerState {
+    latestRequestId: string | null;
+    primary: RecommendationLaneState;
+    strong: RecommendationLaneState;
+}
+
+interface LiveTranscriptSegment {
     id: string;
+    speaker: 'interviewer' | 'user';
     text: string;
-    startedAt: number;
+    timestamp: number;
     updatedAt: number;
-    lastStableText: string;
-    isFinalCandidate: boolean;
+    status: 'active' | 'final';
+    edited: boolean;
+    lastProviderText: string;
+    confidence?: number;
 }
 
 interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
 
-type ResizeCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type ResizeDirection = 'top-left' | 'top' | 'top-right' | 'right' | 'bottom-right' | 'bottom' | 'bottom-left' | 'left';
 type OverlayWindowState = {
     visible: boolean;
     mode: 'launcher' | 'overlay';
@@ -74,12 +104,237 @@ type OverlayWindowState = {
     launcherVisible: boolean;
     overlayAlwaysOnTop: boolean;
     overlayFocused: boolean;
+    isMaximized: boolean;
+    bounds: { x: number; y: number; width: number; height: number } | null;
+    restorableBounds: { x: number; y: number; width: number; height: number } | null;
+};
+
+type TraceDetailTab = 'request' | 'response' | 'resolved_input';
+type TranscriptSaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
+type SttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba' | 'funasr';
+type PromptLabActionId = 'what_to_answer' | 'follow_up_refine' | 'recap' | 'follow_up_questions' | 'answer';
+
+type LlmTraceActionType =
+    | 'what_to_answer'
+    | 'follow_up'
+    | 'recap'
+    | 'follow_up_questions'
+    | 'answer'
+    | 'manual_submit'
+    | 'image_analysis'
+    | 'rag_query_live'
+    | 'rag_query_meeting'
+    | 'rag_query_global';
+
+type LlmTraceActionContext = {
+    actionId?: string;
+    type?: LlmTraceActionType;
+    label?: string;
+    requestId?: string;
+};
+
+type LlmTraceStepRecord = {
+    id: string;
+    actionId: string;
+    kind: 'transport' | 'rag' | 'app';
+    stage: string;
+    lane?: string;
+    provider: string;
+    model: string;
+    method: string;
+    url: string;
+    requestHeaders: string;
+    requestBody: string;
+    responseStatus?: number;
+    responseHeaders: string;
+    responseBody: string;
+    durationMs?: number;
+    streamed: boolean;
+    truncated: boolean;
+    error?: string;
+    startedAt: string;
+    endedAt?: string;
+};
+
+type LlmTraceActionRecord = {
+    id: string;
+    sessionId: string;
+    type: LlmTraceActionType;
+    label: string;
+    requestId?: string;
+    startedAt: string;
+    endedAt?: string;
+    status: 'running' | 'completed' | 'error';
+    steps: LlmTraceStepRecord[];
+    resolvedInput?: Record<string, unknown>;
+    error?: string;
+};
+
+const TRACE_ACTION_LABELS: Record<LlmTraceActionType, string> = {
+    what_to_answer: '怎么回答',
+    follow_up: '追问优化',
+    recap: '总结',
+    follow_up_questions: '追问建议',
+    answer: '作答',
+    manual_submit: '手动提交',
+    image_analysis: '图片分析',
+    rag_query_live: '实时 RAG',
+    rag_query_meeting: '会议 RAG',
+    rag_query_global: '全局 RAG',
+};
+
+type TechnicalGlossaryEntry = {
+    term: string;
+    weight?: number;
+};
+
+type TechnicalGlossaryConfigState = {
+    entries: TechnicalGlossaryEntry[];
+    alibabaWorkspaceId?: string;
+    alibabaVocabularyId?: string;
+    funAsrVocabularyId?: string;
+    updatedAt?: string;
+};
+
+type SttCompareProviderDescriptorView = {
+    id: string;
+    label: string;
+    kind: 'primary' | 'shadow';
+    available: boolean;
+    reason?: string;
+};
+
+type SttCompareProviderResultView = {
+    providerId: string;
+    label: string;
+    partialText: string;
+    finalText: string;
+    firstPartialLatencyMs: number | null;
+    finalLatencyMs: number | null;
+    errors: string[];
+    termHits: string[];
+};
+
+type SttCompareUtteranceView = {
+    id: string;
+    speaker: 'interviewer' | 'user';
+    startedAt: number;
+    endedAt: number | null;
+    audioChunkCount: number;
+    audioBytes: number;
+    providerResults: Record<string, SttCompareProviderResultView>;
+};
+
+type SttCompareResultsView = {
+    active: boolean;
+    startedAt: number | null;
+    stoppedAt: number | null;
+    primaryProviderId: string | null;
+    providers: SttCompareProviderDescriptorView[];
+    glossary: TechnicalGlossaryConfigState;
+    utterances: SttCompareUtteranceView[];
+    summary?: {
+        totalUtterances: number;
+        byProvider: Record<string, {
+            totalUtterances: number;
+            utterancesWithFinal: number;
+            avgFirstPartialLatencyMs: number | null;
+            avgFinalLatencyMs: number | null;
+            errorCount: number;
+            technicalTerms: string[];
+            technicalTermHitCount: number;
+        }>;
+    };
 };
 
 const OVERLAY_PANEL_SIZE_STORAGE_KEY = 'natively_overlay_panel_size';
+const STRONG_PANEL_EXPANDED_STORAGE_KEY = 'natively_strong_answer_panel_expanded';
 const DEFAULT_PANEL_SIZE = { width: 1080, height: 760 };
 const MIN_PANEL_SIZE = { width: 860, height: 600 };
-const MAX_PANEL_SIZE = { width: 1480, height: 960 };
+const MIN_THREE_COLUMN_PANEL_WIDTH = 1260;
+
+const ANSWER_REFINEMENT_INTENTS = new Set([
+    'what_to_answer',
+    'shorten',
+    'expand',
+    'rephrase',
+    'add_example',
+    'more_confident',
+    'more_casual',
+    'more_formal',
+    'simplify'
+]);
+
+const createEmptyLaneState = (): RecommendationLaneState => ({
+    requestId: null,
+    status: 'idle'
+});
+
+const createInitialWhatToAnswerState = (): WhatToAnswerState => ({
+    latestRequestId: null,
+    primary: createEmptyLaneState(),
+    strong: createEmptyLaneState()
+});
+
+const STT_PROVIDER_LABELS: Record<SttProviderId, string> = {
+    google: 'Google 云 STT',
+    groq: 'Groq Whisper',
+    openai: 'OpenAI Whisper',
+    deepgram: 'Deepgram',
+    elevenlabs: 'ElevenLabs Scribe',
+    azure: 'Azure 语音',
+    ibmwatson: 'IBM Watson',
+    soniox: 'Soniox',
+    alibaba: '阿里云 Paraformer',
+    funasr: 'Fun-ASR 实时版',
+};
+
+const FUN_ASR_PROVIDER_ID = 'funasr';
+
+const formatSttProviderLabel = (provider: string | null | undefined) => {
+    if (!provider) return '';
+    return STT_PROVIDER_LABELS[provider as SttProviderId] || provider;
+};
+
+const formatGlossaryText = (config?: TechnicalGlossaryConfigState | null) => {
+    return (config?.entries || [])
+        .map((entry) => typeof entry.weight === 'number' ? `${entry.term} | ${entry.weight}` : entry.term)
+        .join('\n');
+};
+
+const parseGlossaryText = (rawText: string, existingConfig?: TechnicalGlossaryConfigState | null): TechnicalGlossaryConfigState => {
+    const entries = rawText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+            const [term, weightPart] = line.split('|').map((part) => part.trim());
+            const parsedWeight = weightPart ? Number(weightPart) : undefined;
+            return {
+                term,
+                weight: Number.isFinite(parsedWeight) ? parsedWeight : undefined,
+            };
+        })
+        .filter((entry) => entry.term);
+
+    return {
+        entries,
+        alibabaWorkspaceId: existingConfig?.alibabaWorkspaceId,
+        alibabaVocabularyId: existingConfig?.alibabaVocabularyId,
+        funAsrVocabularyId: existingConfig?.funAsrVocabularyId,
+        updatedAt: new Date().toISOString(),
+    };
+};
+
+const formatCompareTimestamp = (value?: number | null) => {
+    if (!value) return '--';
+    return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+
+const formatCompareLatency = (value?: number | null) => {
+    if (typeof value !== 'number') return '--';
+    return `${Math.max(0, Math.round(value))} ms`;
+};
 
 const createMessageId = (prefix: string) => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -87,6 +342,64 @@ const createMessageId = (prefix: string) => {
     }
 
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const createTraceActionContext = (
+    type: LlmTraceActionType,
+    label: string,
+    requestId?: string
+): LlmTraceActionContext => ({
+    actionId: createMessageId(`trace-${type}`),
+    type,
+    label,
+    requestId,
+});
+
+const formatTraceActionTypeLabel = (type: LlmTraceActionType) => TRACE_ACTION_LABELS[type] || type.replace(/_/g, ' ');
+
+const formatTraceStatusLabel = (status: LlmTraceActionRecord['status']) => {
+    if (status === 'error') return '错误';
+    if (status === 'completed') return '完成';
+    return '运行中';
+};
+
+const parseTraceJson = (text: string) => {
+    if (!text) return {};
+
+    try {
+        return JSON.parse(text);
+    } catch {
+        return text;
+    }
+};
+
+const normalizeLane = (lane?: RecommendationLane): RecommendationLane => lane || 'primary';
+
+const normalizeTraceStringForDisplay = (value: string) => {
+    return value
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '    ');
+};
+
+const ensureRequestId = (value: string | undefined, fallbackPrefix: string) => {
+    return value || createMessageId(fallbackPrefix);
+};
+
+const findRecommendationMessageIndex = (
+    items: Message[],
+    target: { lane: RecommendationLane; requestId: string; intent?: string }
+) => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+        const message = items[index];
+        if (message.role !== 'system') continue;
+        if (normalizeLane(message.lane) !== target.lane) continue;
+        if (message.requestId !== target.requestId) continue;
+        if ((message.intent || '') !== (target.intent || '')) continue;
+        return index;
+    }
+
+    return -1;
 };
 
 const TERMINAL_PUNCTUATION_REGEX = /[。！？!?…~～;；:：]$/;
@@ -285,20 +598,29 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
     const [messages, setMessages] = useState<Message[]>([]);
-    const [interviewerDraft, setInterviewerDraft] = useState<InterviewerDraft | null>(null);
+    const [liveTranscriptSegments, setLiveTranscriptSegments] = useState<LiveTranscriptSegment[]>([]);
+    const [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({});
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [activeRecommendationLane, setActiveRecommendationLane] = useState<RecommendationLane>('primary');
+    const [whatToAnswerState, setWhatToAnswerState] = useState<WhatToAnswerState>(createInitialWhatToAnswerState);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [showConversationScrollToBottom, setShowConversationScrollToBottom] = useState(false);
     const [showRecommendationScrollToBottom, setShowRecommendationScrollToBottom] = useState(false);
+    const [currentSttProvider, setCurrentSttProvider] = useState<string | null>(null);
+    const [isFunAsrCompareOpen, setIsFunAsrCompareOpen] = useState(false);
+    const [sttCompareResults, setSttCompareResults] = useState<SttCompareResultsView | null>(null);
+    const [meetingGlossaryConfig, setMeetingGlossaryConfig] = useState<TechnicalGlossaryConfigState | null>(null);
+    const [meetingGlossaryText, setMeetingGlossaryText] = useState('');
+    const [meetingGlossarySaving, setMeetingGlossarySaving] = useState(false);
+    const [meetingGlossarySaved, setMeetingGlossarySaved] = useState(false);
+    const [meetingGlossaryMessage, setMeetingGlossaryMessage] = useState('');
     const [conversationContext, setConversationContext] = useState<string>('');
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
-    const [manualTranscript, setManualTranscript] = useState('');
-    const manualTranscriptRef = useRef<string>('');
-    const [showTranscript, setShowTranscript] = useState(() => {
-        const stored = localStorage.getItem('natively_interviewer_transcript');
-        return stored !== 'false';
+    const [traceDrawerOpen, setTraceDrawerOpen] = useState(false);
+    const [strongPanelExpanded, setStrongPanelExpanded] = useState(() => {
+        return localStorage.getItem(STRONG_PANEL_EXPANDED_STORAGE_KEY) === 'true';
     });
     const [panelSize, setPanelSize] = useState(() => {
         const stored = localStorage.getItem(OVERLAY_PANEL_SIZE_STORAGE_KEY);
@@ -316,223 +638,668 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             return DEFAULT_PANEL_SIZE;
         }
     });
+    const [traceActions, setTraceActions] = useState<LlmTraceActionRecord[]>([]);
+    const [traceInfo, setTraceInfo] = useState<{ logDirectory: string; currentLogFile: string; sessionId: string } | null>(null);
+    const [isTraceLoading, setIsTraceLoading] = useState(false);
+    const [traceError, setTraceError] = useState('');
+    const [selectedTraceActionId, setSelectedTraceActionId] = useState<string | null>(null);
+    const [selectedTraceStepId, setSelectedTraceStepId] = useState<string | null>(null);
+    const [traceDetailTab, setTraceDetailTab] = useState<TraceDetailTab>('request');
+    const [overlayWindowState, setOverlayWindowState] = useState<OverlayWindowState | null>(null);
+    const [transcriptSaveStates, setTranscriptSaveStates] = useState<Record<string, TranscriptSaveState>>({});
+    const [isTranscriptFlushInFlight, setIsTranscriptFlushInFlight] = useState(false);
+
+    const refreshCurrentSttProvider = async () => {
+        if (!window.electronAPI?.getSttProvider) return;
+
+        try {
+            const provider = await window.electronAPI.getSttProvider();
+            setCurrentSttProvider(typeof provider === 'string' ? provider : null);
+        } catch (error) {
+            console.warn('[NativelyInterface] Failed to fetch current STT provider:', error);
+        }
+    };
+
+    const refreshSttCompareResults = async () => {
+        if (!window.electronAPI?.getSttCompareResults) return null;
+
+        try {
+            const results = await window.electronAPI.getSttCompareResults();
+            setSttCompareResults(results || null);
+            return results || null;
+        } catch (error) {
+            console.warn('[NativelyInterface] Failed to fetch STT compare results:', error);
+            return null;
+        }
+    };
+
+    const refreshMeetingGlossary = async () => {
+        if (!window.electronAPI?.getTechnicalGlossary) return null;
+
+        try {
+            const config = await window.electronAPI.getTechnicalGlossary();
+            const normalizedConfig = config || null;
+            setMeetingGlossaryConfig(normalizedConfig);
+            setMeetingGlossaryText(formatGlossaryText(normalizedConfig));
+            return normalizedConfig;
+        } catch (error) {
+            console.warn('[NativelyInterface] Failed to fetch technical glossary:', error);
+            return null;
+        }
+    };
+
+    const openFunAsrComparePanel = async () => {
+        setIsFunAsrCompareOpen(true);
+        setMeetingGlossaryMessage('');
+        await Promise.all([
+            refreshSttCompareResults(),
+            refreshMeetingGlossary(),
+        ]);
+    };
+
+    const closeFunAsrComparePanel = async () => {
+        setIsFunAsrCompareOpen(false);
+
+        if (!funAsrCompareAutoStartedRef.current || !window.electronAPI?.stopSttCompareSession) {
+            return;
+        }
+
+        funAsrCompareAutoStartedRef.current = false;
+
+        try {
+            await window.electronAPI.stopSttCompareSession();
+            await refreshSttCompareResults();
+        } catch (error) {
+            console.warn('[NativelyInterface] Failed to stop auto-started STT compare session:', error);
+        }
+    };
+
+    const handleSaveMeetingGlossary = async () => {
+        if (!window.electronAPI?.setTechnicalGlossary) return;
+
+        setMeetingGlossarySaving(true);
+        setMeetingGlossaryMessage('');
+
+        try {
+            const nextConfig = parseGlossaryText(meetingGlossaryText, meetingGlossaryConfig);
+            const result = await window.electronAPI.setTechnicalGlossary(nextConfig);
+
+            if (!result?.success) {
+                setMeetingGlossaryMessage(result?.error || '保存热词表失败。');
+                return;
+            }
+
+            const savedConfig = result.config || nextConfig;
+            setMeetingGlossaryConfig(savedConfig);
+            setMeetingGlossaryText(formatGlossaryText(savedConfig));
+            setMeetingGlossarySaved(true);
+            setMeetingGlossaryMessage(result.warning || '热词表已保存，新热词会从下一句开始生效。');
+            setTimeout(() => setMeetingGlossarySaved(false), 1800);
+            await refreshSttCompareResults();
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to save meeting glossary:', error);
+            setMeetingGlossaryMessage(error instanceof Error ? error.message : '保存热词表失败。');
+        } finally {
+            setMeetingGlossarySaving(false);
+        }
+    };
 
     // Analytics State
     const requestStartTimeRef = useRef<number | null>(null);
     const messagesRef = useRef<Message[]>([]);
-    const interviewerDraftRef = useRef<InterviewerDraft | null>(null);
-    const interviewerPauseCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const whatToAnswerStateRef = useRef<WhatToAnswerState>(createInitialWhatToAnswerState());
+    const legacyRefinementRequestIdsRef = useRef<Record<string, string>>({});
+    const funAsrCompareAutoStartedRef = useRef(false);
 
-    const clearInterviewerPauseCommitTimer = () => {
-        if (interviewerPauseCommitTimerRef.current) {
-            clearTimeout(interviewerPauseCommitTimerRef.current);
-            interviewerPauseCommitTimerRef.current = null;
-        }
-    };
+    const upsertTraceAction = (incoming: LlmTraceActionRecord) => {
+        setTraceActions(prev => {
+            const next = [...prev];
+            const index = next.findIndex(action => action.id === incoming.id);
+            if (index >= 0) {
+                next[index] = incoming;
+            } else {
+                next.push(incoming);
+            }
 
-    const setInterviewerDraftState = (draft: InterviewerDraft | null) => {
-        interviewerDraftRef.current = draft;
-        setInterviewerDraft(draft);
+            next.sort((left, right) => {
+                const rightTimestamp = right.endedAt || right.startedAt;
+                const leftTimestamp = left.endedAt || left.startedAt;
+                return rightTimestamp.localeCompare(leftTimestamp);
+            });
+
+            return next.slice(0, 60);
+        });
     };
 
     useEffect(() => {
         messagesRef.current = messages;
     }, [messages]);
 
-    const commitInterviewerDraft = (clearLivePreview: boolean = false) => {
-        clearInterviewerPauseCommitTimer();
+    useEffect(() => {
+        whatToAnswerStateRef.current = whatToAnswerState;
+    }, [whatToAnswerState]);
 
-        const draft = interviewerDraftRef.current;
-        if (!draft) {
-            return;
+    useEffect(() => {
+        localStorage.setItem(STRONG_PANEL_EXPANDED_STORAGE_KEY, String(strongPanelExpanded));
+    }, [strongPanelExpanded]);
+
+    useEffect(() => {
+        overlayWindowStateRef.current = overlayWindowState;
+    }, [overlayWindowState]);
+
+    useEffect(() => {
+        if (!isExpanded) {
+            setActiveRecommendationLane('primary');
         }
+    }, [isExpanded]);
 
-        const committedText = (draft.lastStableText || draft.text).trim();
-        if (!committedText) {
-            setInterviewerDraftState(null);
-            return;
+    const beginWhatToAnswerRequest = (requestId: string) => {
+        legacyRefinementRequestIdsRef.current = {};
+        setWhatToAnswerState({
+            latestRequestId: requestId,
+            primary: { requestId, status: 'started' },
+            strong: { requestId, status: 'started' }
+        });
+    };
+
+    const updateWhatToAnswerLaneState = (
+        payload: {
+            requestId: string;
+            lane: RecommendationLane;
+            status: WhatToAnswerLaneStatus;
+            modelId?: string;
+            modelLabel?: string;
+            message?: string;
         }
+    ) => {
+        setWhatToAnswerState(prev => {
+            let nextState = prev;
 
-        setMessages(prev => {
-            const lastMessage = findLastCommittedInterviewerMessage(prev);
-
-            if (
-                lastMessage?.role === 'interviewer' &&
-                normalizeTranscriptForComparison(lastMessage.text) === normalizeTranscriptForComparison(committedText)
-            ) {
-                messagesRef.current = prev;
-                return prev;
+            if (payload.status === 'started' && payload.lane === 'primary' && prev.latestRequestId !== payload.requestId) {
+                nextState = {
+                    latestRequestId: payload.requestId,
+                    primary: { requestId: payload.requestId, status: 'idle' },
+                    strong: { requestId: payload.requestId, status: 'idle' }
+                };
             }
 
-            if (shouldReplaceCommittedInterviewerMessage(lastMessage, committedText, draft.updatedAt)) {
-                const updated = prev.map(message => (
-                    message.id === lastMessage!.id
-                        ? {
-                            ...message,
-                            text: chooseMoreCompleteTranscript(lastMessage!.text, committedText),
-                            timestamp: draft.updatedAt,
-                        }
-                        : message
-                ));
-                messagesRef.current = updated;
+            if (nextState.latestRequestId && nextState.latestRequestId !== payload.requestId) {
+                return nextState;
+            }
+
+            const laneState: RecommendationLaneState = {
+                ...nextState[payload.lane],
+                requestId: payload.requestId,
+                status: payload.status,
+                modelId: payload.modelId ?? nextState[payload.lane].modelId,
+                modelLabel: payload.modelLabel ?? nextState[payload.lane].modelLabel,
+                message: payload.message
+            };
+
+            return {
+                ...nextState,
+                latestRequestId: payload.requestId,
+                [payload.lane]: laneState
+            };
+        });
+    };
+
+    const upsertRecommendationMessage = (payload: {
+        lane: RecommendationLane;
+        requestId: string;
+        intent?: string;
+        text: string;
+        isStreaming?: boolean;
+        modelId?: string;
+        modelLabel?: string;
+    }) => {
+        setMessages(prev => {
+            const index = findRecommendationMessageIndex(prev, {
+                lane: payload.lane,
+                requestId: payload.requestId,
+                intent: payload.intent
+            });
+
+            if (index >= 0) {
+                const updated = [...prev];
+                const nextText = payload.isStreaming && updated[index].isStreaming
+                    ? `${updated[index].text}${payload.text}`
+                    : payload.text;
+                updated[index] = {
+                    ...updated[index],
+                    text: nextText,
+                    isStreaming: payload.isStreaming,
+                    modelId: payload.modelId ?? updated[index].modelId,
+                    modelLabel: payload.modelLabel ?? updated[index].modelLabel,
+                };
                 return updated;
             }
 
-            const nextMessages: Message[] = [...prev, {
-                id: draft.id,
-                role: 'interviewer' as const,
-                text: committedText,
-                timestamp: draft.updatedAt,
+            return [...prev, {
+                id: createMessageId(`${payload.intent || 'recommendation'}-${payload.lane}`),
+                role: 'system',
+                text: payload.text,
+                intent: payload.intent,
+                lane: payload.lane,
+                requestId: payload.requestId,
+                isStreaming: payload.isStreaming,
+                modelId: payload.modelId,
+                modelLabel: payload.modelLabel,
             }];
-            messagesRef.current = nextMessages;
-            return nextMessages;
         });
-
-        setInterviewerDraftState(null);
-        if (clearLivePreview) {
-            setRollingTranscript('');
-        }
-        setIsInterviewerSpeaking(false);
     };
 
-    const scheduleInterviewerDraftCommit = () => {
-        clearInterviewerPauseCommitTimer();
-
-        interviewerPauseCommitTimerRef.current = setTimeout(() => {
-            const currentDraft = interviewerDraftRef.current;
-            if (!currentDraft) {
-                return;
-            }
-
-            if (Date.now() - currentDraft.updatedAt >= INTERVIEWER_PAUSE_COMMIT_MS) {
-                commitInterviewerDraft(true);
-            }
-        }, INTERVIEWER_PAUSE_COMMIT_MS);
+    const appendSystemMessage = (text: string, lane: RecommendationLane = 'primary') => {
+        setMessages(prev => [...prev, {
+            id: createMessageId(`system-${lane}`),
+            role: 'system',
+            text,
+            lane,
+        }]);
     };
 
-    const handleIncomingInterviewerTranscript = (transcript: {
-        text: string;
-        final: boolean;
-        timestamp: number;
-    }) => {
-        const nextText = transcript.text.trim();
-        if (!nextText) {
-            return;
-        }
-
-        const currentDraft = interviewerDraftRef.current;
-        let nextDraft: InterviewerDraft;
-
-        if (!currentDraft) {
-            const lastCommittedMessage = findLastCommittedInterviewerMessage(messagesRef.current);
-            if (shouldReplaceCommittedInterviewerMessage(lastCommittedMessage, nextText, transcript.timestamp)) {
-                const refinedText = chooseMoreCompleteTranscript(lastCommittedMessage!.text, nextText);
-
-                setMessages(prev => {
-                    const nextMessages = prev.filter(message => message.id !== lastCommittedMessage!.id);
-                    if (nextMessages.length === prev.length) {
-                        messagesRef.current = prev;
-                        return prev;
-                    }
-                    messagesRef.current = nextMessages;
-                    return nextMessages;
-                });
-
-                nextDraft = {
-                    id: lastCommittedMessage!.id,
-                    text: refinedText,
-                    startedAt: lastCommittedMessage!.timestamp ?? transcript.timestamp,
-                    updatedAt: transcript.timestamp,
-                    lastStableText: refinedText,
-                    isFinalCandidate: transcript.final,
-                };
-            } else {
-                nextDraft = {
-                    id: createMessageId('interviewer'),
-                    text: nextText,
-                    startedAt: transcript.timestamp,
-                    updatedAt: transcript.timestamp,
-                    lastStableText: transcript.final ? nextText : '',
-                    isFinalCandidate: transcript.final,
-                };
-            }
-        } else if (isTranscriptRefinement(currentDraft.text, nextText)) {
-            const refinedText = chooseMoreCompleteTranscript(currentDraft.text, nextText);
-            nextDraft = {
-                ...currentDraft,
-                text: refinedText,
-                updatedAt: transcript.timestamp,
-                lastStableText: transcript.final ? refinedText : currentDraft.lastStableText,
-                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
-            };
-        } else if (shouldAppendInterviewerFragment(currentDraft.text, nextText)) {
-            const appendedText = joinInterviewerFragments(currentDraft.text, nextText);
-            nextDraft = {
-                ...currentDraft,
-                text: appendedText,
-                updatedAt: transcript.timestamp,
-                lastStableText: transcript.final ? appendedText : currentDraft.lastStableText,
-                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
-            };
-        } else if (shouldTreatAsInterviewerRevision(currentDraft.text, nextText, Math.abs(transcript.timestamp - currentDraft.updatedAt))) {
-            const revisedText = transcript.final
-                ? nextText
-                : (
-                    normalizeTranscriptForComparison(nextText).length >= normalizeTranscriptForComparison(currentDraft.text).length
-                        ? nextText
-                        : currentDraft.text
-                );
-
-            nextDraft = {
-                ...currentDraft,
-                text: revisedText,
-                updatedAt: transcript.timestamp,
-                lastStableText: transcript.final ? revisedText : currentDraft.lastStableText,
-                isFinalCandidate: currentDraft.isFinalCandidate || transcript.final,
-            };
-        } else {
-            commitInterviewerDraft(false);
-            nextDraft = {
-                id: createMessageId('interviewer'),
-                text: nextText,
-                startedAt: transcript.timestamp,
-                updatedAt: transcript.timestamp,
-                lastStableText: transcript.final ? nextText : '',
-                isFinalCandidate: transcript.final,
-            };
-        }
-
-        setInterviewerDraftState(nextDraft);
-
-        const shouldCommitImmediately = nextDraft.text.length >= HARD_MAX_INTERVIEWER_CHARS;
-
-        if (shouldCommitImmediately) {
-            commitInterviewerDraft(false);
-            return;
-        }
-
-        scheduleInterviewerDraftCommit();
+    const resolveWhatToAnswerRequestId = (rawRequestId?: string) => {
+        return ensureRequestId(
+            rawRequestId || whatToAnswerStateRef.current.latestRequestId || undefined,
+            'legacy-what-to-answer'
+        );
     };
 
-    // Sync transcript setting
-    useEffect(() => {
-        const handleStorage = () => {
-            const stored = localStorage.getItem('natively_interviewer_transcript');
-            setShowTranscript(stored !== 'false');
+    const resolveRefinementRequestId = (intent: string, lane: RecommendationLane, rawRequestId?: string) => {
+        if (rawRequestId) {
+            legacyRefinementRequestIdsRef.current[`${lane}:${intent}`] = rawRequestId;
+            return rawRequestId;
+        }
+
+        const key = `${lane}:${intent}`;
+        const existing = legacyRefinementRequestIdsRef.current[key];
+        if (existing) {
+            return existing;
+        }
+
+        const nextId = createMessageId(`legacy-${intent}-${lane}`);
+        legacyRefinementRequestIdsRef.current[key] = nextId;
+        return nextId;
+    };
+
+    const getLatestAnswerLikeMessage = (lane: RecommendationLane) => {
+        const currentMessages = messagesRef.current;
+        for (let index = currentMessages.length - 1; index >= 0; index -= 1) {
+            const message = currentMessages[index];
+            if (message.role !== 'system') continue;
+            if (normalizeLane(message.lane) !== lane) continue;
+            if (message.isStreaming) continue;
+            if (!message.intent || ANSWER_REFINEMENT_INTENTS.has(message.intent)) {
+                return message;
+            }
+        }
+
+        return null;
+    };
+
+    const refreshLiveTranscriptState = async () => {
+        if (!window.electronAPI?.getLiveTranscriptState) return;
+        try {
+            const state = await window.electronAPI.getLiveTranscriptState();
+            setLiveTranscriptSegments(state);
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to load live transcript state:', error);
+        }
+    };
+
+    const autoSizeTranscriptTextarea = (element: HTMLTextAreaElement | null) => {
+        if (!element) return;
+        element.style.height = '0px';
+        element.style.height = `${element.scrollHeight}px`;
+    };
+
+    const updateConversationScrollSnapshot = () => {
+        const element = conversationScrollRef.current;
+        if (!element) return;
+
+        conversationScrollSnapshotRef.current = {
+            scrollTop: element.scrollTop,
+            scrollHeight: element.scrollHeight,
+            pinned: isScrollNearBottom(element),
         };
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, []);
+    };
 
-    useEffect(() => () => clearInterviewerPauseCommitTimer(), []);
+    const restoreConversationScrollPosition = () => {
+        const element = conversationScrollRef.current;
+        if (!element) return;
+
+        const snapshot = conversationScrollSnapshotRef.current;
+        if (snapshot.pinned) {
+            updateConversationScrollSnapshot();
+            return;
+        }
+
+        const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+        const nextScrollTop = Math.min(snapshot.scrollTop, maxScrollTop);
+        if (Math.abs(element.scrollTop - nextScrollTop) > 1) {
+            element.scrollTop = nextScrollTop;
+        }
+
+        updateConversationScrollSnapshot();
+    };
+
+    const registerTranscriptTextarea = (segmentId: string) => (element: HTMLTextAreaElement | null) => {
+        if (!element) {
+            transcriptTextareaRefs.current.delete(segmentId);
+            return;
+        }
+
+        transcriptTextareaRefs.current.set(segmentId, element);
+        autoSizeTranscriptTextarea(element);
+    };
+
+    const markTranscriptTextareaForAutosize = (segmentId: string) => {
+        pendingTranscriptAutosizeIdsRef.current.add(segmentId);
+    };
+
+    const captureTranscriptSelection = (segmentId: string, element: HTMLTextAreaElement | null) => {
+        if (!element) return;
+        focusedTranscriptSegmentIdRef.current = segmentId;
+        focusedTranscriptSelectionRef.current = {
+            segmentId,
+            start: element.selectionStart ?? 0,
+            end: element.selectionEnd ?? element.selectionStart ?? 0,
+        };
+    };
+
+    const clearFocusedTranscriptSelection = () => {
+        focusedTranscriptSegmentIdRef.current = null;
+        focusedTranscriptSelectionRef.current = null;
+    };
+
+    const getShouldAutoFollowConversation = () => {
+        return !focusedTranscriptSegmentIdRef.current;
+    };
+
+    const clearTranscriptSaveStateTimeout = (segmentId: string) => {
+        const timeout = transcriptSaveStateTimeoutsRef.current.get(segmentId);
+        if (!timeout) return;
+        clearTimeout(timeout);
+        transcriptSaveStateTimeoutsRef.current.delete(segmentId);
+    };
+
+    const setTranscriptSaveState = (segmentId: string, status: TranscriptSaveState) => {
+        clearTranscriptSaveStateTimeout(segmentId);
+        setTranscriptSaveStates((prev) => {
+            if (status === 'idle') {
+                if (!(segmentId in prev)) return prev;
+                const next = { ...prev };
+                delete next[segmentId];
+                return next;
+            }
+
+            if (prev[segmentId] === status) return prev;
+            return { ...prev, [segmentId]: status };
+        });
+    };
+
+    const scheduleTranscriptSaveStateReset = (segmentId: string, delayMs: number = 1400) => {
+        clearTranscriptSaveStateTimeout(segmentId);
+        const timeout = setTimeout(() => {
+            transcriptSaveStateTimeoutsRef.current.delete(segmentId);
+            setTranscriptSaveState(segmentId, 'idle');
+        }, delayMs);
+        transcriptSaveStateTimeoutsRef.current.set(segmentId, timeout);
+    };
+
+    const updateTranscriptDraft = (segmentId: string, nextText: string) => {
+        const nextDrafts = { ...transcriptDraftsRef.current, [segmentId]: nextText };
+        transcriptDraftsRef.current = nextDrafts;
+        setTranscriptDrafts(nextDrafts);
+        markTranscriptTextareaForAutosize(segmentId);
+        setTranscriptSaveState(segmentId, 'pending');
+    };
+
+    const syncTranscriptDraftsFromSegments = (segments: LiveTranscriptSegment[]) => {
+        liveTranscriptSegmentsRef.current = segments;
+        const dirtyIds = dirtyTranscriptIdsRef.current;
+        const knownSegmentIds = new Set(segments.map(segment => segment.id));
+        const nextDrafts = { ...transcriptDraftsRef.current };
+        let changed = false;
+
+        for (const segment of segments) {
+            if (!dirtyIds.has(segment.id) && nextDrafts[segment.id] !== segment.text) {
+                nextDrafts[segment.id] = segment.text;
+                markTranscriptTextareaForAutosize(segment.id);
+                changed = true;
+            }
+        }
+
+        for (const segmentId of Object.keys(nextDrafts)) {
+            if (!knownSegmentIds.has(segmentId) && !dirtyIds.has(segmentId)) {
+                delete nextDrafts[segmentId];
+                changed = true;
+            }
+        }
+
+        for (const segmentId of Object.keys(transcriptSaveStates)) {
+            if (!knownSegmentIds.has(segmentId) && !dirtyIds.has(segmentId)) {
+                setTranscriptSaveState(segmentId, 'idle');
+            }
+        }
+
+        if (changed) {
+            transcriptDraftsRef.current = nextDrafts;
+            setTranscriptDrafts(nextDrafts);
+        }
+    };
+
+    const clearTranscriptSaveTimeout = (segmentId: string) => {
+        const timeout = transcriptSaveTimeoutsRef.current.get(segmentId);
+        if (timeout) {
+            clearTimeout(timeout);
+            transcriptSaveTimeoutsRef.current.delete(segmentId);
+        }
+    };
+
+    const scheduleTranscriptRagResync = (delayMs: number = 800) => {
+        if (transcriptRagResyncTimeoutRef.current) {
+            clearTimeout(transcriptRagResyncTimeoutRef.current);
+        }
+
+        transcriptRagResyncTimeoutRef.current = setTimeout(() => {
+            transcriptRagResyncTimeoutRef.current = null;
+            void window.electronAPI?.resyncLiveTranscriptRag?.().catch((error) => {
+                console.error('[NativelyInterface] Failed to resync live transcript RAG:', error);
+            });
+        }, delayMs);
+    };
+
+    const canMergeTranscriptSegmentWithPrevious = (segmentId: string) => {
+        const segments = liveTranscriptSegmentsRef.current;
+        const currentIndex = segments.findIndex(segment => segment.id === segmentId);
+        if (currentIndex <= 0) return false;
+
+        const speaker = segments[currentIndex]?.speaker;
+        if (!speaker) return false;
+
+        for (let index = currentIndex - 1; index >= 0; index -= 1) {
+            if (segments[index].speaker === speaker) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    const mergeTranscriptSegmentWithPrevious = async (segmentId: string) => {
+        if (!window.electronAPI?.mergeLiveTranscriptSegmentWithPrevious) return false;
+
+        await flushPendingTranscriptEdits({ syncRag: false });
+
+        const result = await window.electronAPI.mergeLiveTranscriptSegmentWithPrevious({ id: segmentId });
+        if (!result?.success || !result.state || !result.mergedIntoId) {
+            if (result?.error) {
+                console.error('[NativelyInterface] Failed to merge transcript segment:', result.error);
+            }
+            return false;
+        }
+
+        clearTranscriptSaveTimeout(segmentId);
+        dirtyTranscriptIdsRef.current.delete(segmentId);
+        setTranscriptSaveState(segmentId, 'idle');
+
+        setLiveTranscriptSegments(result.state);
+        syncTranscriptDraftsFromSegments(result.state);
+        setTranscriptSaveState(result.mergedIntoId, 'saved');
+        scheduleTranscriptSaveStateReset(result.mergedIntoId);
+
+        pendingTranscriptFocusRef.current = {
+            segmentId: result.mergedIntoId,
+            cursorPosition: result.cursorPosition,
+        };
+
+        const ragResult = await window.electronAPI?.resyncLiveTranscriptRag?.();
+        if (ragResult && !ragResult.success) {
+            console.error('[NativelyInterface] Failed to resync live transcript RAG after merge:', ragResult.error);
+        }
+
+        return true;
+    };
+
+    const persistTranscriptDraft = async (
+        segmentId: string,
+        options?: { immediate?: boolean; scheduleRagSync?: boolean }
+    ) => {
+        clearTranscriptSaveTimeout(segmentId);
+
+        const saveTask = async (): Promise<boolean> => {
+            const currentSegment = liveTranscriptSegmentsRef.current.find(segment => segment.id === segmentId);
+            if (!currentSegment) {
+                dirtyTranscriptIdsRef.current.delete(segmentId);
+                setTranscriptSaveState(segmentId, 'idle');
+                return false;
+            }
+
+            const rawDraft = transcriptDraftsRef.current[segmentId] ?? currentSegment.text;
+            const nextText = rawDraft.trim();
+            if (!nextText) {
+                updateTranscriptDraft(segmentId, currentSegment.text);
+                dirtyTranscriptIdsRef.current.delete(segmentId);
+                setTranscriptSaveState(segmentId, 'idle');
+                return false;
+            }
+
+            if (nextText === currentSegment.text) {
+                dirtyTranscriptIdsRef.current.delete(segmentId);
+                setTranscriptSaveState(segmentId, 'idle');
+                return false;
+            }
+
+            setTranscriptSaveState(segmentId, 'saving');
+            const result = await window.electronAPI?.editLiveTranscriptSegment?.({ id: segmentId, text: nextText });
+            if (!result?.success) {
+                console.error('[NativelyInterface] Failed to save transcript edit:', result?.error);
+                setTranscriptSaveState(segmentId, 'error');
+                return false;
+            }
+
+            const nextState = result.state || [];
+            setLiveTranscriptSegments(nextState);
+            syncTranscriptDraftsFromSegments(nextState);
+
+            const savedText = nextState.find(segment => segment.id === segmentId)?.text ?? nextText;
+            const latestDraft = (transcriptDraftsRef.current[segmentId] ?? savedText).trim();
+
+            if (latestDraft && latestDraft !== savedText) {
+                dirtyTranscriptIdsRef.current.add(segmentId);
+                setTranscriptSaveState(segmentId, 'pending');
+                if (options?.immediate) {
+                    return await persistTranscriptDraft(segmentId, options);
+                }
+                const timeout = setTimeout(() => {
+                    void persistTranscriptDraft(segmentId, { scheduleRagSync: options?.scheduleRagSync });
+                }, 250);
+                transcriptSaveTimeoutsRef.current.set(segmentId, timeout);
+                return false;
+            }
+
+            dirtyTranscriptIdsRef.current.delete(segmentId);
+            setTranscriptSaveState(segmentId, 'saved');
+            scheduleTranscriptSaveStateReset(segmentId);
+            if (options?.scheduleRagSync) {
+                scheduleTranscriptRagResync();
+            }
+            return true;
+        };
+
+        const inFlight = transcriptSaveInFlightRef.current.get(segmentId) || Promise.resolve(false);
+        const chainedTask = inFlight.catch(() => false).then(saveTask);
+        transcriptSaveInFlightRef.current.set(segmentId, chainedTask);
+        try {
+            return await chainedTask;
+        } finally {
+            if (transcriptSaveInFlightRef.current.get(segmentId) === chainedTask) {
+                transcriptSaveInFlightRef.current.delete(segmentId);
+            }
+        }
+    };
+
+    const scheduleTranscriptDraftSave = (segmentId: string) => {
+        clearTranscriptSaveTimeout(segmentId);
+        const timeout = setTimeout(() => {
+            void persistTranscriptDraft(segmentId, { scheduleRagSync: true });
+        }, 250);
+        transcriptSaveTimeoutsRef.current.set(segmentId, timeout);
+    };
+
+    const flushPendingTranscriptEdits = async (options?: { syncRag?: boolean }) => {
+        const dirtyIds = Array.from(dirtyTranscriptIdsRef.current);
+        const hasPendingRagSync = Boolean(transcriptRagResyncTimeoutRef.current);
+
+        if (dirtyIds.length === 0) {
+            if (options?.syncRag && hasPendingRagSync) {
+                clearTimeout(transcriptRagResyncTimeoutRef.current!);
+                transcriptRagResyncTimeoutRef.current = null;
+                const result = await window.electronAPI?.resyncLiveTranscriptRag?.();
+                if (result && !result.success) {
+                    console.error('[NativelyInterface] Failed to flush transcript-triggered RAG resync:', result.error);
+                }
+            }
+            return false;
+        }
+
+        setIsTranscriptFlushInFlight(true);
+        dirtyIds.forEach(clearTranscriptSaveTimeout);
+
+        let flushedAny = false;
+        let guard = 0;
+        try {
+            while (dirtyTranscriptIdsRef.current.size > 0 && guard < 4) {
+                const ids = Array.from(dirtyTranscriptIdsRef.current);
+                for (const segmentId of ids) {
+                    const didFlush = await persistTranscriptDraft(segmentId, { immediate: true, scheduleRagSync: false });
+                    flushedAny = flushedAny || didFlush;
+                }
+                guard += 1;
+            }
+
+            if (options?.syncRag && flushedAny) {
+                if (transcriptRagResyncTimeoutRef.current) {
+                    clearTimeout(transcriptRagResyncTimeoutRef.current);
+                    transcriptRagResyncTimeoutRef.current = null;
+                }
+                const result = await window.electronAPI?.resyncLiveTranscriptRag?.();
+                if (result && !result.success) {
+                    console.error('[NativelyInterface] Failed to flush transcript-triggered RAG resync:', result.error);
+                }
+            }
+        } finally {
+            setIsTranscriptFlushInFlight(false);
+        }
+
+        return flushedAny;
+    };
 
     const clampPanelSize = (width: number, height: number) => {
-        const maxWidth = Math.min(MAX_PANEL_SIZE.width, Math.floor((window.screen?.availWidth || MAX_PANEL_SIZE.width) * 0.9));
-        const maxHeight = Math.min(MAX_PANEL_SIZE.height, Math.floor((window.screen?.availHeight || MAX_PANEL_SIZE.height) * 0.9));
-
         return {
-            width: Math.round(Math.min(Math.max(width, MIN_PANEL_SIZE.width), maxWidth)),
-            height: Math.round(Math.min(Math.max(height, MIN_PANEL_SIZE.height), maxHeight))
+            width: Math.round(Math.max(width, MIN_PANEL_SIZE.width)),
+            height: Math.round(Math.max(height, MIN_PANEL_SIZE.height))
         };
     };
 
@@ -543,13 +1310,58 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return nextSize;
     };
 
+    const applyOverlayWindowStateSnapshot = (state: OverlayWindowState | null) => {
+        if (!state) return;
+
+        overlayWindowStateRef.current = state;
+        setOverlayWindowState(state);
+
+        if (!state.isMaximized && state.bounds) {
+            const nextSize = clampPanelSize(state.bounds.width, state.bounds.height);
+            if (
+                panelSizeRef.current.width !== nextSize.width ||
+                panelSizeRef.current.height !== nextSize.height
+            ) {
+                panelSizeRef.current = nextSize;
+                setPanelSize(nextSize);
+            }
+        }
+    };
+
+    const toggleOverlayMaximize = async () => {
+        if (!window.electronAPI) return;
+
+        try {
+            const nextState = overlayWindowStateRef.current?.isMaximized
+                ? await window.electronAPI.restoreOverlayBounds?.()
+                : await window.electronAPI.maximizeOverlayToWorkArea?.();
+
+            applyOverlayWindowStateSnapshot((nextState as OverlayWindowState | undefined) || null);
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to toggle overlay maximized state:', error);
+        }
+    };
+
+    useEffect(() => {
+        if (!isExpanded || overlayWindowState?.isMaximized) {
+            return;
+        }
+
+        const requiredWidth = strongPanelExpanded ? MIN_THREE_COLUMN_PANEL_WIDTH : MIN_PANEL_SIZE.width;
+
+        if (panelSize.width >= requiredWidth) return;
+        updatePanelSize(requiredWidth, panelSize.height);
+    }, [isExpanded, strongPanelExpanded, panelSize.width, panelSize.height, overlayWindowState?.isMaximized]);
+
     const scrollConversationToBottom = (behavior: ScrollBehavior = 'smooth') => {
         const element = conversationScrollRef.current;
         if (!element) return;
 
         element.scrollTo({ top: element.scrollHeight, behavior });
+        interviewerMessagesEndRef.current?.scrollIntoView({ block: 'end', behavior });
         isConversationPinnedToBottomRef.current = true;
         setShowConversationScrollToBottom(false);
+        requestAnimationFrame(() => updateConversationScrollSnapshot());
     };
 
     const scrollRecommendationToBottom = (behavior: ScrollBehavior = 'smooth') => {
@@ -565,6 +1377,22 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         const pinnedToBottom = isScrollNearBottom(conversationScrollRef.current);
         isConversationPinnedToBottomRef.current = pinnedToBottom;
         setShowConversationScrollToBottom(!pinnedToBottom);
+        updateConversationScrollSnapshot();
+    };
+
+    const handleConversationPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('[data-transcript-segment-id]')) {
+            return;
+        }
+
+        const activeElement = document.activeElement as HTMLTextAreaElement | null;
+        if (!activeElement?.dataset?.transcriptSegmentId) {
+            return;
+        }
+
+        activeElement.blur();
+        clearFocusedTranscriptSelection();
     };
 
     const handleRecommendationScroll = () => {
@@ -615,20 +1443,20 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             nextY = resizeState.startWindowY + (resizeState.startHeight - clampedSize.height);
         }
 
-        const maxX = Math.max(0, (window.screen?.availWidth || clampedSize.width) - clampedSize.width);
-        const maxY = Math.max(0, (window.screen?.availHeight || clampedSize.height) - clampedSize.height);
-
         void window.electronAPI?.setOverlayBounds?.({
-            x: Math.round(Math.min(Math.max(nextX, 0), maxX)),
-            y: Math.round(Math.min(Math.max(nextY, 0), maxY)),
+            x: Math.round(nextX),
+            y: Math.round(nextY),
             width: clampedSize.width,
             height: clampedSize.height
         });
     }
 
-    const handleResizeStart = (corner: ResizeCorner) => (event: React.PointerEvent<HTMLDivElement>) => {
+    const handleResizeStart = (corner: ResizeDirection) => (event: React.PointerEvent<HTMLDivElement>) => {
         event.preventDefault();
         event.stopPropagation();
+        if (overlayWindowStateRef.current?.isMaximized) {
+            return;
+        }
 
         resizeStateRef.current = {
             corner,
@@ -649,24 +1477,35 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         localStorage.setItem(OVERLAY_PANEL_SIZE_STORAGE_KEY, JSON.stringify(panelSize));
     }, [panelSize]);
 
-    useEffect(() => () => stopResizing(), []);
+    useEffect(() => {
+        isExpandedRef.current = isExpanded;
+    }, [isExpanded]);
 
-    const [rollingTranscript, setRollingTranscript] = useState('');  // For interviewer rolling text bar
-    const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);  // Track if actively speaking
-    const [voiceInput, setVoiceInput] = useState('');  // Accumulated user voice input
-    const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
+    useEffect(() => () => {
+        stopResizing();
+        transcriptSaveTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+        transcriptSaveTimeoutsRef.current.clear();
+        transcriptSaveStateTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+        transcriptSaveStateTimeoutsRef.current.clear();
+        if (transcriptRagResyncTimeoutRef.current) {
+            clearTimeout(transcriptRagResyncTimeoutRef.current);
+            transcriptRagResyncTimeoutRef.current = null;
+        }
+    }, []);
+
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const interviewerMessagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const conversationScrollRef = useRef<HTMLDivElement>(null);
     const recommendationScrollRef = useRef<HTMLDivElement>(null);
     const isConversationPinnedToBottomRef = useRef(true);
     const isRecommendationPinnedToBottomRef = useRef(true);
+    const manualRecordingStartAtRef = useRef<number | null>(null);
+    const latestUserTranscriptSnapshotRef = useRef('');
     const resizeStateRef = useRef<{
-        corner: ResizeCorner;
+        corner: ResizeDirection;
         startX: number;
         startY: number;
         startWindowX: number;
@@ -675,6 +1514,26 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         startHeight: number;
     } | null>(null);
     const panelSizeRef = useRef(panelSize);
+    const transcriptDraftsRef = useRef<Record<string, string>>({});
+    const liveTranscriptSegmentsRef = useRef<LiveTranscriptSegment[]>([]);
+    const dirtyTranscriptIdsRef = useRef<Set<string>>(new Set());
+    const transcriptSaveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const transcriptSaveInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+    const transcriptRagResyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const transcriptSaveStateTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const transcriptTextareaRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
+    const overlayWindowStateRef = useRef<OverlayWindowState | null>(null);
+    const focusedTranscriptSegmentIdRef = useRef<string | null>(null);
+    const focusedTranscriptSelectionRef = useRef<{ segmentId: string; start: number; end: number } | null>(null);
+    const pendingTranscriptFocusRef = useRef<{ segmentId: string; cursorPosition?: number } | null>(null);
+    const pendingTranscriptAutosizeIdsRef = useRef<Set<string>>(new Set());
+    const conversationScrollSnapshotRef = useRef({
+        scrollTop: 0,
+        scrollHeight: 0,
+        pinned: true,
+    });
+    const freezeAutoResizeRef = useRef(false);
+    const isExpandedRef = useRef(isExpanded);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -752,6 +1611,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 // Use getBoundingClientRect to get the exact rendered size including padding
                 const rect = entry.target.getBoundingClientRect();
 
+                if (freezeAutoResizeRef.current || overlayWindowStateRef.current?.isMaximized || isExpandedRef.current) {
+                    continue;
+                }
+
                 // Send exact dimensions to Electron
                 // Removed buffer to ensure tight fit
                 console.log('[NativelyInterface] ResizeObserver:', Math.ceil(rect.width), Math.ceil(rect.height));
@@ -772,18 +1635,20 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Let the DOM settle, then measure and push new dimensions
         requestAnimationFrame(() => {
             if (!contentRef.current) return;
+            if (freezeAutoResizeRef.current || overlayWindowStateRef.current?.isMaximized || isExpandedRef.current) return;
             const rect = contentRef.current.getBoundingClientRect();
             window.electronAPI?.updateContentDimensions({
                 width: Math.ceil(rect.width),
                 height: Math.ceil(rect.height)
             });
         });
-    }, [attachedContext]);
+    }, [attachedContext, overlayWindowState?.isMaximized]);
 
     // Force initial sizing safety check
     useEffect(() => {
         const timer = setTimeout(() => {
             if (contentRef.current) {
+                if (freezeAutoResizeRef.current || overlayWindowStateRef.current?.isMaximized || isExpandedRef.current) return;
                 const rect = contentRef.current.getBoundingClientRect();
                 window.electronAPI?.updateContentDimensions({
                     width: Math.ceil(rect.width),
@@ -800,29 +1665,179 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             return;
         }
 
-        if (isConversationPinnedToBottomRef.current) {
-            requestAnimationFrame(() => scrollConversationToBottom('smooth'));
+        if (isConversationPinnedToBottomRef.current && getShouldAutoFollowConversation()) {
+            requestAnimationFrame(() => {
+                scrollConversationToBottom('auto');
+                requestAnimationFrame(() => scrollConversationToBottom('auto'));
+            });
         } else {
             setShowConversationScrollToBottom(true);
         }
 
         if (isRecommendationPinnedToBottomRef.current) {
-            requestAnimationFrame(() => scrollRecommendationToBottom('smooth'));
+            requestAnimationFrame(() => scrollRecommendationToBottom('auto'));
         } else {
             setShowRecommendationScrollToBottom(true);
         }
-    }, [messages, interviewerDraft, isExpanded, isProcessing, isManualRecording, voiceInput, manualTranscript]);
+    }, [messages, liveTranscriptSegments, isExpanded, isProcessing, isManualRecording]);
 
     // Build conversation context from messages
     useEffect(() => {
         const context = messages
             .filter(m => !m.isStreaming)
             .filter(m => m.role !== 'user' || !m.hasScreenshot)
+            .filter(m => m.role !== 'system' || normalizeLane(m.lane) === 'primary')
             .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
             .slice(-20)
             .join('\n');
         setConversationContext(context);
     }, [messages]);
+
+    useEffect(() => {
+        syncTranscriptDraftsFromSegments(liveTranscriptSegments);
+    }, [liveTranscriptSegments]);
+
+    useEffect(() => {
+        const pendingIds = Array.from(pendingTranscriptAutosizeIdsRef.current);
+        if (pendingIds.length === 0) return;
+        pendingTranscriptAutosizeIdsRef.current.clear();
+        pendingIds.forEach((segmentId) => {
+            autoSizeTranscriptTextarea(transcriptTextareaRefs.current.get(segmentId) || null);
+        });
+
+        if (isConversationPinnedToBottomRef.current && getShouldAutoFollowConversation()) {
+            requestAnimationFrame(() => {
+                scrollConversationToBottom('auto');
+                requestAnimationFrame(() => scrollConversationToBottom('auto'));
+            });
+        } else {
+            requestAnimationFrame(() => restoreConversationScrollPosition());
+        }
+    }, [transcriptDrafts, liveTranscriptSegments]);
+
+    useLayoutEffect(() => {
+        if (!isExpanded) return;
+        restoreConversationScrollPosition();
+    }, [liveTranscriptSegments, messages, isManualRecording, isExpanded]);
+
+    useLayoutEffect(() => {
+        const pendingFocus = pendingTranscriptFocusRef.current;
+        if (!pendingFocus) return;
+
+        const target = transcriptTextareaRefs.current.get(pendingFocus.segmentId);
+        if (!target) return;
+
+        pendingTranscriptFocusRef.current = null;
+        target.focus({ preventScroll: true });
+        autoSizeTranscriptTextarea(target);
+
+        const cursorPosition = Math.max(0, Math.min(
+            pendingFocus.cursorPosition ?? target.value.length,
+            target.value.length
+        ));
+        target.setSelectionRange(cursorPosition, cursorPosition);
+        focusedTranscriptSegmentIdRef.current = pendingFocus.segmentId;
+        focusedTranscriptSelectionRef.current = {
+            segmentId: pendingFocus.segmentId,
+            start: cursorPosition,
+            end: cursorPosition,
+        };
+    }, [liveTranscriptSegments, transcriptDrafts]);
+
+    useLayoutEffect(() => {
+        if (pendingTranscriptFocusRef.current) return;
+
+        const activeElement = document.activeElement as HTMLTextAreaElement | null;
+        const activeSegmentId = activeElement?.dataset?.transcriptSegmentId || null;
+        if (!activeElement || !activeSegmentId) return;
+
+        const trackedSelection = focusedTranscriptSelectionRef.current;
+        if (!trackedSelection || trackedSelection.segmentId !== activeSegmentId) return;
+
+        const target = transcriptTextareaRefs.current.get(activeSegmentId);
+        if (!target || target !== activeElement) return;
+
+        const start = Math.max(0, Math.min(trackedSelection.start, target.value.length));
+        const end = Math.max(start, Math.min(trackedSelection.end, target.value.length));
+
+        if (target.selectionStart !== start || target.selectionEnd !== end) {
+            target.setSelectionRange(start, end);
+        }
+    }, [liveTranscriptSegments, transcriptDrafts]);
+
+    useEffect(() => {
+        void refreshLiveTranscriptState();
+
+        if (!window.electronAPI?.onLiveTranscriptUpdate) {
+            return;
+        }
+
+        const unsubscribe = window.electronAPI.onLiveTranscriptUpdate((segments) => {
+            setLiveTranscriptSegments(segments);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        void refreshCurrentSttProvider();
+        void refreshSttCompareResults();
+    }, []);
+
+    useEffect(() => {
+        if (currentSttProvider || !liveTranscriptSegments.some((segment) => segment.speaker === 'interviewer')) {
+            return;
+        }
+
+        void refreshCurrentSttProvider();
+    }, [liveTranscriptSegments, currentSttProvider]);
+
+    useEffect(() => {
+        if (!window.electronAPI?.onSttCompareUpdate) return;
+
+        return window.electronAPI.onSttCompareUpdate((results) => {
+            setSttCompareResults(results || null);
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!isFunAsrCompareOpen) return;
+        void refreshSttCompareResults();
+        void refreshMeetingGlossary();
+    }, [isFunAsrCompareOpen]);
+
+    useEffect(() => {
+        if (!isFunAsrCompareOpen || !isConnected || !window.electronAPI?.startSttCompareSession) {
+            return;
+        }
+
+        const providers = sttCompareResults?.providers || [];
+        const funAsrDescriptor = providers.find((provider) => provider.id === FUN_ASR_PROVIDER_ID);
+        if (!funAsrDescriptor?.available || sttCompareResults?.active) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const startCompare = async () => {
+            try {
+                await window.electronAPI.startSttCompareSession();
+                if (cancelled) return;
+                funAsrCompareAutoStartedRef.current = true;
+                await refreshSttCompareResults();
+            } catch (error) {
+                if (!cancelled) {
+                    console.warn('[NativelyInterface] Failed to auto-start Fun-ASR compare session:', error);
+                }
+            }
+        };
+
+        void startCompare();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isFunAsrCompareOpen, isConnected, sttCompareResults?.active, sttCompareResults?.providers]);
 
     // Listen for settings window visibility changes
     useEffect(() => {
@@ -861,6 +1876,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         let mounted = true;
         const applyOverlayVisibility = (state: OverlayWindowState) => {
             if (!mounted || !state) return;
+            applyOverlayWindowStateSnapshot(state);
 
             if (state.mode === 'overlay' || !state.visible) {
                 setIsExpanded(state.visible);
@@ -891,13 +1907,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages([]);
             setInputValue('');
             setAttachedContext([]);
-            setManualTranscript('');
-            setVoiceInput('');
-            setRollingTranscript('');
-            setIsInterviewerSpeaking(false);
             setIsProcessing(false);
-            clearInterviewerPauseCommitTimer();
-            setInterviewerDraftState(null);
+            setActiveRecommendationLane('primary');
+            setWhatToAnswerState(createInitialWhatToAnswerState());
+            setLiveTranscriptSegments([]);
+            setCurrentSttProvider(null);
+            setIsFunAsrCompareOpen(false);
+            setSttCompareResults(null);
+            setMeetingGlossaryMessage('');
+            transcriptDraftsRef.current = {};
+            setTranscriptDrafts({});
+            setTranscriptSaveStates({});
+            dirtyTranscriptIdsRef.current.clear();
+            isRecordingRef.current = false;
+            manualRecordingStartAtRef.current = null;
+            latestUserTranscriptSnapshotRef.current = '';
+            legacyRefinementRequestIdsRef.current = {};
+            funAsrCompareAutoStartedRef.current = false;
             // Optionally reset connection status if needed, but connection persists
 
             // Track new conversation/session if applicable?
@@ -907,6 +1933,80 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         });
         return () => unsubscribe();
     }, []);
+
+    useEffect(() => {
+        if (!window.electronAPI?.getLlmTraceActions || !window.electronAPI?.getLlmTraceInfo || !window.electronAPI?.onLlmTraceUpdate) {
+            return;
+        }
+
+        let mounted = true;
+
+        const loadInitialTrace = async () => {
+            setIsTraceLoading(true);
+            setTraceError('');
+            try {
+                const [info, actions] = await Promise.all([
+                    window.electronAPI.getLlmTraceInfo(),
+                    window.electronAPI.getLlmTraceActions({ limit: 40, currentSessionOnly: true }),
+                ]);
+
+                if (!mounted) return;
+                setTraceInfo(info);
+                setTraceActions(actions);
+            } catch (error) {
+                if (!mounted) return;
+                console.error('[NativelyInterface] Failed to load LLM trace actions:', error);
+                setTraceError(error instanceof Error ? error.message : '加载调用链记录失败');
+            } finally {
+                if (mounted) {
+                    setIsTraceLoading(false);
+                }
+            }
+        };
+
+        loadInitialTrace();
+
+        const unsubscribe = window.electronAPI.onLlmTraceUpdate((data) => {
+            if (!mounted) return;
+
+            if (data.kind === 'cleared') {
+                setTraceActions([]);
+                setSelectedTraceActionId(null);
+                setSelectedTraceStepId(null);
+                setTraceInfo(prev => prev ? { ...prev, sessionId: data.sessionId } : prev);
+                return;
+            }
+
+            upsertTraceAction(data.action);
+            setTraceInfo(prev => prev ? { ...prev, sessionId: data.action.sessionId } : prev);
+        });
+
+        return () => {
+            mounted = false;
+            unsubscribe();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (traceActions.length === 0) {
+            setSelectedTraceActionId(null);
+            setSelectedTraceStepId(null);
+            return;
+        }
+
+        const selectedAction = traceActions.find(action => action.id === selectedTraceActionId) || traceActions[0];
+        if (selectedAction.id !== selectedTraceActionId) {
+            setSelectedTraceActionId(selectedAction.id);
+        }
+
+        const selectedStep = selectedAction.steps.find(step => step.id === selectedTraceStepId)
+            || selectedAction.steps[selectedAction.steps.length - 1]
+            || null;
+
+        if (selectedStep?.id !== selectedTraceStepId) {
+            setSelectedTraceStepId(selectedStep?.id || null);
+        }
+    }, [traceActions, selectedTraceActionId, selectedTraceStepId]);
 
 
     const handleScreenshotAttach = (data: { path: string; preview: string }) => {
@@ -937,58 +2037,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // Real-time Transcripts
         cleanups.push(window.electronAPI.onNativeAudioTranscript((transcript) => {
-            // When Answer button is active, capture USER transcripts for voice input
-            // Use ref to avoid stale closure issue
             if (isRecordingRef.current && transcript.speaker === 'user') {
-                if (transcript.final) {
-                    // Accumulate final transcripts
-                    setVoiceInput(prev => {
-                        const updated = prev + (prev ? ' ' : '') + transcript.text;
-                        voiceInputRef.current = updated;
-                        return updated;
-                    });
-                    setManualTranscript('');  // Clear partial preview
-                    manualTranscriptRef.current = '';
-                } else {
-                    // Show live partial transcript
-                    setManualTranscript(transcript.text);
-                    manualTranscriptRef.current = transcript.text;
-                }
-                return;  // Don't add to messages while recording
-            }
-
-            // Ignore user mic transcripts when not recording
-            // Only interviewer (system audio) transcripts should appear in chat
-            if (transcript.speaker === 'user') {
-                return;  // Skip user mic input - only relevant when Answer button is active
-            }
-
-            // Only show interviewer (system audio) transcripts in rolling bar
-            if (transcript.speaker !== 'interviewer') {
-                return;  // Safety check for any other speaker types
-            }
-
-            setIsInterviewerSpeaking(!transcript.final);
-            setRollingTranscript(transcript.final ? '' : transcript.text);
-            handleIncomingInterviewerTranscript({
-                text: transcript.text,
-                final: transcript.final,
-                timestamp: transcript.timestamp || Date.now(),
-            });
-
-            if (transcript.final) {
-                setTimeout(() => {
-                    setIsInterviewerSpeaking(false);
-                }, 1800);
-            }
-        }));
-
-        cleanups.push(window.electronAPI.onNativeAudioSpeechEnded((event) => {
-            if (event.speaker !== 'interviewer') {
+                latestUserTranscriptSnapshotRef.current = transcript.text.trim();
                 return;
             }
 
-            commitInterviewerDraft(true);
+            if (transcript.speaker === 'user') {
+                return;
+            }
         }));
 
         // AI Suggestions from native audio (legacy)
@@ -999,120 +2055,99 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onSuggestionGenerated((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: data.suggestion
-            }]);
+            appendSystemMessage(data.suggestion);
         }));
 
         cleanups.push(window.electronAPI.onSuggestionError((err) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err.error}`
-            }]);
+            appendSystemMessage(`错误：${err.error}`);
         }));
 
-
+        if (typeof window.electronAPI.onIntelligenceSuggestedAnswerStatus === 'function') {
+            cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerStatus((data) => {
+                updateWhatToAnswerLaneState({
+                    requestId: resolveWhatToAnswerRequestId(data.requestId),
+                    lane: normalizeLane(data.lane),
+                    status: data.status,
+                    modelId: data.modelId,
+                    modelLabel: data.modelLabel,
+                    message: data.message
+                });
+            }));
+        }
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-            // Progressive update for 'what_to_answer' mode
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If we already have a streaming message for this intent, append
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-
-                // Otherwise, start a new one (First token)
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: data.token,
-                    intent: 'what_to_answer',
-                    isStreaming: true
-                }];
+            const lane = normalizeLane(data.lane);
+            const requestId = resolveWhatToAnswerRequestId(data.requestId);
+            updateWhatToAnswerLaneState({
+                requestId,
+                lane,
+                status: 'streaming',
+                modelId: data.modelId,
+                modelLabel: data.modelLabel
+            });
+            upsertRecommendationMessage({
+                lane,
+                requestId,
+                intent: 'what_to_answer',
+                text: data.token,
+                isStreaming: true,
+                modelId: data.modelId,
+                modelLabel: data.modelLabel,
             });
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If we were streaming, finalize it
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    // Start new array to avoid mutation
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer, // Ensure final consistency
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-
-                // If we missed the stream (or not streaming), append fresh
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: data.answer,  // Plain text, no markdown - ready to speak
-                    intent: 'what_to_answer'
-                }];
+            const lane = normalizeLane(data.lane);
+            const requestId = resolveWhatToAnswerRequestId(data.requestId);
+            updateWhatToAnswerLaneState({
+                requestId,
+                lane,
+                status: 'completed',
+                modelId: data.modelId,
+                modelLabel: data.modelLabel
+            });
+            upsertRecommendationMessage({
+                lane,
+                requestId,
+                intent: 'what_to_answer',
+                text: data.answer,
+                isStreaming: false,
+                modelId: data.modelId,
+                modelLabel: data.modelLabel,
             });
         }));
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                // New stream start (e.g. user clicked Shorten)
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: data.token,
-                    intent: data.intent,
-                    isStreaming: true
-                }];
+            const lane = normalizeLane(data.lane);
+            const requestId = resolveRefinementRequestId(data.intent, lane, data.requestId);
+            upsertRecommendationMessage({
+                lane,
+                requestId,
+                intent: data.intent,
+                text: data.token,
+                isStreaming: true,
+                modelId: data.modelId,
+                modelLabel: data.modelLabel,
             });
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: data.answer,
-                    intent: data.intent
-                }];
+            const lane = normalizeLane(data.lane);
+            const requestId = resolveRefinementRequestId(data.intent, lane, data.requestId);
+            upsertRecommendationMessage({
+                lane,
+                requestId,
+                intent: data.intent,
+                text: data.answer,
+                isStreaming: false,
+                modelId: data.modelId,
+                modelLabel: data.modelLabel,
             });
+            delete legacyRefinementRequestIdsRef.current[`${lane}:${data.intent}`];
         }));
 
         // STREAMING: Recap
@@ -1220,7 +2255,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `🎯 **Answer:**\n\n${data.answer}`
+                text: `📝 **Answer:**\n\n${data.answer}`
             }]);
         }));
 
@@ -1229,7 +2264,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `❌ Error (${data.mode}): ${data.error}`
+                text: `❌ 错误（${data.mode}）：${data.error}`
             }]);
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
@@ -1251,10 +2286,119 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Optional: Trigger a small toast or state change for visual feedback
     };
 
+    const handleOpenTraceFolder = async () => {
+        if (!window.electronAPI?.openLlmTraceDirectory) return;
+
+        try {
+            const result = await window.electronAPI.openLlmTraceDirectory();
+            if (!result.success) {
+                setTraceError(result.error || '打开调用链目录失败');
+                return;
+            }
+
+            setTraceError('');
+            setTraceInfo({
+                logDirectory: result.logDirectory,
+                currentLogFile: result.currentLogFile,
+                sessionId: result.sessionId,
+            });
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to open LLM trace directory:', error);
+            setTraceError(error instanceof Error ? error.message : '打开调用链目录失败');
+        }
+    };
+
+    const handleOpenTraceWindow = async () => {
+        if (!window.electronAPI?.openTraceWindow) return;
+
+        try {
+            await window.electronAPI.openTraceWindow();
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to open Trace window:', error);
+        }
+    };
+
+    const handleOpenRawTranscriptWindow = async () => {
+        if (!window.electronAPI?.openRawTranscriptWindow) return;
+
+        try {
+            await window.electronAPI.openRawTranscriptWindow();
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to open Raw STT window:', error);
+        }
+    };
+
+    const handleOpenPromptLabWindow = async (action: PromptLabActionId) => {
+        if (!window.electronAPI?.openPromptLabWindow) return;
+
+        try {
+            if (action === 'what_to_answer') {
+                await window.electronAPI.openPromptLabWindow({
+                    action,
+                    context: {
+                        imagePaths: attachedContext.map(item => item.path)
+                    }
+                });
+                return;
+            }
+
+            if (action === 'follow_up_refine') {
+                const lane = isExpanded ? activeRecommendationLane : 'primary';
+                const sourceMessage = getLatestAnswerLikeMessage(lane);
+                await window.electronAPI.openPromptLabWindow({
+                    action,
+                    context: {
+                        lane,
+                        sourceAnswer: sourceMessage?.text,
+                        intent: 'shorten'
+                    }
+                });
+                return;
+            }
+
+            if (action === 'answer') {
+                await window.electronAPI.openPromptLabWindow({
+                    action,
+                    context: {
+                        imagePaths: attachedContext.map(item => item.path)
+                    }
+                });
+                return;
+            }
+
+            await window.electronAPI.openPromptLabWindow({ action });
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to open Prompt Lab window:', error);
+        }
+    };
+
+    const handleClearTraceSession = async () => {
+        if (!window.electronAPI?.clearLlmTraceSession) return;
+
+        try {
+            const result = await window.electronAPI.clearLlmTraceSession();
+            if (!result.success) {
+                return;
+            }
+
+            setTraceError('');
+            setTraceActions([]);
+            setSelectedTraceActionId(null);
+            setSelectedTraceStepId(null);
+            setTraceInfo(prev => prev ? { ...prev, sessionId: result.sessionId } : prev);
+        } catch (error) {
+            console.error('[NativelyInterface] Failed to clear LLM trace session:', error);
+            setTraceError(error instanceof Error ? error.message : '清空调用链会话失败');
+        }
+    };
+
     const handleWhatToSay = async () => {
         setIsExpanded(true);
         setIsProcessing(true);
+        setActiveRecommendationLane('primary');
         analytics.trackCommandExecuted('what_to_say');
+        const requestId = createMessageId('what-to-answer-request');
+        beginWhatToAnswerRequest(requestId);
 
         // Capture and clear attached image context
         const currentAttachments = attachedContext;
@@ -1264,21 +2408,28 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'user',
-                text: 'What should I say about this?',
+                text: '我该怎么回答这个？',
                 hasScreenshot: true,
                 screenshotPreview: currentAttachments[0].preview
             }]);
         }
 
         try {
+            await flushPendingTranscriptEdits({ syncRag: true });
             // Pass imagePath if attached
-            await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            await window.electronAPI.generateWhatToSay(
+                undefined,
+                currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
+                requestId
+            );
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            updateWhatToAnswerLaneState({
+                requestId,
+                lane: 'primary',
+                status: 'error',
+                message: String(err)
+            });
+            appendSystemMessage(`错误：${err}`);
         } finally {
             setIsProcessing(false);
         }
@@ -1288,15 +2439,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
+        const lane = isExpanded ? activeRecommendationLane : 'primary';
+        const sourceMessage = getLatestAnswerLikeMessage(lane);
+
+        if (lane === 'strong' && !sourceMessage) {
+            setIsProcessing(false);
+            appendSystemMessage('请先选定一条强模型答案，再执行追问类操作。', 'strong');
+            return;
+        }
 
         try {
-            await window.electronAPI.generateFollowUp(intent);
+            await flushPendingTranscriptEdits({ syncRag: true });
+            await window.electronAPI.generateFollowUp(intent, undefined, {
+                lane,
+                answer: sourceMessage?.text,
+                requestId: createMessageId(`follow-up-${lane}`)
+            });
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            appendSystemMessage(`错误：${err}`, lane);
         } finally {
             setIsProcessing(false);
         }
@@ -1308,13 +2468,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         analytics.trackCommandExecuted('recap');
 
         try {
+            await flushPendingTranscriptEdits({ syncRag: true });
             await window.electronAPI.generateRecap();
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            appendSystemMessage(`错误：${err}`);
         } finally {
             setIsProcessing(false);
         }
@@ -1326,13 +2483,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         analytics.trackCommandExecuted('suggest_questions');
 
         try {
+            await flushPendingTranscriptEdits({ syncRag: true });
             await window.electronAPI.generateFollowUpQuestions();
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            appendSystemMessage(`错误：${err}`);
         } finally {
             setIsProcessing(false);
         }
@@ -1410,14 +2564,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     updated[prev.length - 1] = {
                         ...lastMsg,
                         isStreaming: false,
-                        text: lastMsg.text + `\n\n[Error: ${error}]`
+                        text: lastMsg.text + `\n\n[错误：${error}]`
                     };
                     return updated;
                 }
                 return [...prev, {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: `❌ Error: ${error}`
+                    text: `❌ 错误：${error}`
                 }];
             });
         }));
@@ -1468,7 +2622,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                         updated[prev.length - 1] = {
                             ...lastMsg,
                             isStreaming: false,
-                            text: lastMsg.text + `\n\n[RAG Error: ${data.error}]`
+                            text: lastMsg.text + `\n\n[RAG 错误：${data.error}]`
                         };
                         return updated;
                     }
@@ -1483,22 +2637,41 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     const handleAnswerNow = async () => {
         if (isManualRecording) {
-            // Stop recording - send accumulated voice input to Gemini
-            isRecordingRef.current = false;  // Update ref immediately
+            // Stop recording - send the canonical user live transcript to Gemini
+            isRecordingRef.current = false;
             setIsManualRecording(false);
-            setManualTranscript('');  // Clear live preview
+            const recordingStartedAt = manualRecordingStartAtRef.current;
+            manualRecordingStartAtRef.current = null;
 
             // Send manual finalization signal to STT Providers
-            window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
+            await window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
 
             const currentAttachments = attachedContext;
-            setAttachedContext([]); // Clear context immediately on send
+            setAttachedContext([]);
 
-            const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
-            setVoiceInput('');
-            voiceInputRef.current = '';
-            setManualTranscript('');
-            manualTranscriptRef.current = '';
+            let transcriptState = liveTranscriptSegments;
+            try {
+                const committed = await window.electronAPI?.commitLiveTranscriptSegment?.({ speaker: 'user' });
+                if (committed?.state) {
+                    transcriptState = committed.state;
+                    setLiveTranscriptSegments(committed.state);
+                } else if (window.electronAPI?.getLiveTranscriptState) {
+                    transcriptState = await window.electronAPI.getLiveTranscriptState();
+                    setLiveTranscriptSegments(transcriptState);
+                }
+            } catch (error) {
+                console.error('[NativelyInterface] Failed to commit user live transcript:', error);
+            }
+
+            const question = transcriptState
+                .filter(segment => segment.speaker === 'user')
+                .filter(segment => recordingStartedAt === null || (segment.updatedAt || segment.timestamp) >= recordingStartedAt - 250)
+                .map(segment => segment.text.trim())
+                .filter(Boolean)
+                .join(' ')
+                .trim() || latestUserTranscriptSnapshotRef.current;
+
+            latestUserTranscriptSnapshotRef.current = '';
 
             if (!question && currentAttachments.length === 0) {
                 // No voice input and no image
@@ -1510,14 +2683,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 return;
             }
 
-            // Show user's spoken question
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'user',
-                text: question,
-                hasScreenshot: currentAttachments.length > 0,
-                screenshotPreview: currentAttachments[0]?.preview
-            }]);
+            if (currentAttachments.length > 0) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'user',
+                    text: '已附加截图',
+                    timestamp: Date.now(),
+                    hasScreenshot: true,
+                    screenshotPreview: currentAttachments[0]?.preview
+                }]);
+            }
 
             // Add placeholder for streaming response
             setMessages(prev => [...prev, {
@@ -1528,42 +2703,36 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             }]);
 
             setIsProcessing(true);
+            const traceContext = createTraceActionContext('answer', '作答');
 
             try {
-                let prompt = '';
+                await flushPendingTranscriptEdits({ syncRag: true });
+                const answerPreview = await window.electronAPI?.getPromptLabActionPreview?.('answer', {
+                    question,
+                    imagePaths: currentAttachments.map(item => item.path)
+                });
+                const prompt = answerPreview?.execution?.contextPrompt || '';
 
-                if (currentAttachments.length > 0) {
-                    // Image + Voice Context
-                    prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
-User said: "${question}"
-
-Instructions:
-1. Analyze the screenshot in the context of what the user said.
-2. Provide a direct, helpful answer.
-3. Be concise.`;
-                } else {
+                if (currentAttachments.length === 0) {
                     // JIT RAG pre-flight: try to use indexed meeting context first
-                    const ragResult = await window.electronAPI.ragQueryLive?.(question);
+                    const ragResult = await window.electronAPI.ragQueryLive?.(question, traceContext);
                     if (ragResult?.success) {
-                        // JIT RAG handled it — response streamed via rag:stream-chunk events
+                        // JIT RAG handled it 鈥?response streamed via rag:stream-chunk events
                         return;
                     }
-
-                    // Voice Only (Smart Extract) — fallback
-                    prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
-Instructions:
-1. Extract the core question being asked
-2. Provide a clear, concise, and professional answer that the user can say out loud
-3. Keep the answer conversational but informative (2-4 sentences ideal)
-4. Do NOT include phrases like "The question is..." - just give the answer directly
-5. Format for speaking out loud, not for reading
-
-Provide only the answer, nothing else.`;
                 }
 
                 // Call Streaming API: message = question, context = instructions
                 requestStartTimeRef.current = Date.now();
-                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+                await window.electronAPI.streamGeminiChat(
+                    question,
+                    currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
+                    prompt,
+                    {
+                        skipSystemPrompt: true,
+                        traceContext
+                    }
+                );
 
             } catch (err) {
                 // Initial invocation failing (e.g. IPC error before stream starts)
@@ -1575,22 +2744,21 @@ Provide only the answer, nothing else.`;
                         return prev.slice(0, -1).concat({
                             id: Date.now().toString(),
                             role: 'system',
-                            text: `❌ Error starting stream: ${err}`
+                            text: `❌ 启动流式回复失败：${err}`
                         });
                     }
                     return [...prev, {
                         id: Date.now().toString(),
                         role: 'system',
-                        text: `❌ Error: ${err}`
+                        text: `❌ 错误：${err}`
                     }];
                 });
             }
         } else {
-            // Start recording - reset voice input state
-            setVoiceInput('');
-            voiceInputRef.current = '';
-            setManualTranscript('');
-            isRecordingRef.current = true;  // Update ref immediately
+            // Start recording and mark a new candidate-answer capture window
+            latestUserTranscriptSnapshotRef.current = '';
+            manualRecordingStartAtRef.current = Date.now();
+            isRecordingRef.current = true;
             setIsManualRecording(true);
 
 
@@ -1617,7 +2785,7 @@ Provide only the answer, nothing else.`;
         setMessages(prev => [...prev, {
             id: Date.now().toString(),
             role: 'user',
-            text: userText || (currentAttachments.length > 0 ? 'Analyze this screenshot' : ''),
+            text: userText || (currentAttachments.length > 0 ? '请分析这张截图' : ''),
             hasScreenshot: currentAttachments.length > 0,
             screenshotPreview: currentAttachments[0]?.preview
         }]);
@@ -1632,13 +2800,21 @@ Provide only the answer, nothing else.`;
 
         setIsExpanded(true);
         setIsProcessing(true);
+        const traceContext = createTraceActionContext('manual_submit', '手动提交');
 
         try {
+            await flushPendingTranscriptEdits({ syncRag: true });
+            let canonicalContext = conversationContext;
+            if (window.electronAPI?.getIntelligenceContext) {
+                const contextSnapshot = await window.electronAPI.getIntelligenceContext();
+                canonicalContext = contextSnapshot?.context || canonicalContext;
+            }
+
             // JIT RAG pre-flight: try to use indexed meeting context first
             if (currentAttachments.length === 0) {
-                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
+                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '', traceContext);
                 if (ragResult?.success) {
-                    // JIT RAG handled it — response streamed via rag:stream-chunk events
+                    // JIT RAG handled it 鈥?response streamed via rag:stream-chunk events
                     return;
                 }
             }
@@ -1646,9 +2822,12 @@ Provide only the answer, nothing else.`;
             // Pass imagePath if attached, AND conversation context
             requestStartTimeRef.current = Date.now();
             await window.electronAPI.streamGeminiChat(
-                userText || 'Analyze this screenshot',
+                userText || '请分析这张截图',
                 currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
-                conversationContext // Pass context so "answer this" works
+                canonicalContext,
+                {
+                    traceContext
+                }
             );
         } catch (err) {
             setIsProcessing(false);
@@ -1659,13 +2838,13 @@ Provide only the answer, nothing else.`;
                     return prev.slice(0, -1).concat({
                         id: Date.now().toString(),
                         role: 'system',
-                        text: `❌ Error starting stream: ${err}`
+                        text: `❌ 启动流式回复失败：${err}`
                     });
                 }
                 return [...prev, {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: `❌ Error: ${err}`
+                    text: `❌ 错误：${err}`
                 }];
             });
         }
@@ -1673,8 +2852,9 @@ Provide only the answer, nothing else.`;
 
     const clearChat = () => {
         setMessages([]);
-        setRollingTranscript('');
-        setIsInterviewerSpeaking(false);
+        setActiveRecommendationLane('primary');
+        setWhatToAnswerState(createInitialWhatToAnswerState());
+        legacyRefinementRequestIdsRef.current = {};
     };
 
     const compactMarkdownText = (text: string) => (
@@ -1970,6 +3150,23 @@ Provide only the answer, nothing else.`;
         const handleKeyDown = (e: KeyboardEvent) => {
             const { handleWhatToSay, handleFollowUp, handleFollowUpQuestions, handleRecap, handleAnswerNow } = handlersRef.current;
 
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                const activeElement = document.activeElement as HTMLElement | null;
+                const focusedSegmentId = activeElement?.dataset?.transcriptSegmentId || focusedTranscriptSegmentIdRef.current;
+                if (focusedSegmentId || dirtyTranscriptIdsRef.current.size > 0) {
+                    e.preventDefault();
+                    void (async () => {
+                        if (focusedSegmentId) {
+                            await persistTranscriptDraft(focusedSegmentId, { immediate: true, scheduleRagSync: true });
+                            return;
+                        }
+
+                        await flushPendingTranscriptEdits({ syncRag: true });
+                    })();
+                    return;
+                }
+            }
+
             // Chat Shortcuts (Scope: Local to Chat/Overlay usually, but we allow them here if focused)
             if (isShortcutPressed(e, 'whatToAnswer')) {
                 e.preventDefault();
@@ -2018,6 +3215,9 @@ Provide only the answer, nothing else.`;
             } else {
                 await window.electronAPI.resetIntelligence();
                 setMessages([]);
+                setActiveRecommendationLane('primary');
+                setWhatToAnswerState(createInitialWhatToAnswerState());
+                legacyRefinementRequestIdsRef.current = {};
                 setAttachedContext([]);
                 setInputValue('');
             }
@@ -2053,6 +3253,9 @@ Provide only the answer, nothing else.`;
             } else {
                 await window.electronAPI.resetIntelligence();
                 setMessages([]);
+                setActiveRecommendationLane('primary');
+                setWhatToAnswerState(createInitialWhatToAnswerState());
+                legacyRefinementRequestIdsRef.current = {};
                 setAttachedContext([]);
                 setInputValue('');
             }
@@ -2107,55 +3310,519 @@ Provide only the answer, nothing else.`;
         return () => window.removeEventListener('keydown', handleGeneralKeyDown);
     }, [isShortcutPressed]);
 
-    const conversationMessages = messages.filter((msg) => msg.role === 'interviewer' || msg.role === 'user');
-    const displayedConversationMessages = interviewerDraft
-        ? [...conversationMessages, {
-            id: interviewerDraft.id,
-            role: 'interviewer' as const,
-            text: interviewerDraft.text,
-            timestamp: interviewerDraft.updatedAt,
-            isStreaming: true
-        }]
-        : conversationMessages;
+    const displayedLiveTranscriptSegments = liveTranscriptSegments
+        .slice()
+        .sort((left, right) => {
+            if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+            return left.updatedAt - right.updatedAt;
+        });
+    const recordingUserTranscriptSegments = displayedLiveTranscriptSegments
+        .filter((segment) => segment.speaker === 'user')
+        .filter((segment) => manualRecordingStartAtRef.current === null || (segment.updatedAt || segment.timestamp) >= manualRecordingStartAtRef.current - 250);
+    const conversationMessages: Message[] = [
+        ...displayedLiveTranscriptSegments.map((segment) => ({
+            id: segment.id,
+            role: segment.speaker === 'user' ? 'user' : 'interviewer',
+            text: segment.text,
+            timestamp: segment.timestamp,
+            isStreaming: segment.status === 'active',
+            liveTranscriptSegmentId: segment.id,
+            edited: segment.edited,
+            transcriptStatus: segment.status,
+        } as Message)),
+        ...messages.filter((msg) => msg.role === 'user')
+    ].sort((left, right) => (left.timestamp || 0) - (right.timestamp || 0));
+    const displayedConversationMessages = conversationMessages;
     const recommendationMessages = messages.filter((msg) => msg.role === 'system');
-    const hasOverlayContent = displayedConversationMessages.length > 0 || recommendationMessages.length > 0 || isManualRecording || isProcessing;
-    const liveUserTranscript = [voiceInput, manualTranscript].filter(Boolean).join(voiceInput && manualTranscript ? ' ' : '');
+    const primaryRecommendationMessages = recommendationMessages.filter((msg) => normalizeLane(msg.lane) === 'primary');
+    const strongRecommendationMessages = recommendationMessages.filter((msg) => normalizeLane(msg.lane) === 'strong');
+    const isOverlayMaximized = overlayWindowState?.isMaximized ?? false;
+    const hasInterviewerTranscription = liveTranscriptSegments.some((segment) => segment.speaker === 'interviewer');
+    const effectivePanelWidth = isOverlayMaximized
+        ? overlayWindowState?.bounds?.width ?? panelSize.width
+        : panelSize.width;
+    const primaryLaneState = whatToAnswerState.primary;
+    const strongLaneState = whatToAnswerState.strong;
+    const hasOverlayContent =
+        displayedConversationMessages.length > 0 ||
+        recommendationMessages.length > 0 ||
+        isManualRecording ||
+        isProcessing;
+    const activeLaneLabel = activeRecommendationLane === 'strong' ? '强模型答案' : '当前推荐';
+    const shouldForceStrongCollapse = effectivePanelWidth < MIN_THREE_COLUMN_PANEL_WIDTH;
+    const effectiveStrongPanelExpanded = strongPanelExpanded && !shouldForceStrongCollapse;
+    const strongLaneHasContent = strongRecommendationMessages.length > 0;
+    const shouldShowCurrentSttProvider = hasInterviewerTranscription && Boolean(currentSttProvider);
+    const selectedTraceAction = traceActions.find(action => action.id === selectedTraceActionId) || traceActions[0] || null;
+    const selectedTraceStep = selectedTraceAction?.steps.find(step => step.id === selectedTraceStepId)
+        || selectedTraceAction?.steps[selectedTraceAction.steps.length - 1]
+        || null;
+    const strongLaneStatusCard = (() => {
+        if (strongLaneState.status === 'started' || strongLaneState.status === 'streaming') {
+            return {
+                tone: 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100',
+                label: '生成中',
+                description: '强模型答案正在并行生成。'
+            };
+        }
 
-    const renderConversationBubble = (msg: Message) => {
-        const isUserMessage = msg.role === 'user';
+        if (strongLaneState.status === 'completed') {
+            return {
+                tone: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100',
+                label: '已完成',
+                description: strongLaneHasContent
+                    ? '强模型答案已生成完成，可直接对比。'
+                    : (strongLaneState.message || '强模型请求已完成，但当前没有可显示的答案内容。')
+            };
+        }
+
+        if (strongLaneState.status === 'skipped') {
+            return {
+                tone: 'border-amber-400/20 bg-amber-500/10 text-amber-100',
+                label: '已跳过',
+                description: strongLaneState.message || '主推荐通道已经使用了当前默认强模型。'
+            };
+        }
+
+        if (strongLaneState.status === 'error') {
+            return {
+                tone: 'border-red-400/20 bg-red-500/10 text-red-100',
+                label: '错误',
+                description: strongLaneState.message || '强模型通道未能为这次请求生成答案。'
+            };
+        }
+
+        return {
+            tone: 'border-white/10 bg-white/[0.03] text-slate-200',
+            label: '就绪',
+            description: shouldForceStrongCollapse
+                ? '当前窗口较窄且 Trace 已展开，所以强模型通道会暂时折叠。'
+                : '展开这里即可对比当前推荐和默认强模型答案。'
+        };
+    })();
+
+    const formatTraceTimestamp = (value?: string) => {
+        if (!value) return '--';
+        return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
+    const formatTraceDuration = (value?: number) => {
+        if (typeof value !== 'number' || Number.isNaN(value)) return '--';
+        if (value < 1000) return `${value}ms`;
+        return `${(value / 1000).toFixed(2)}s`;
+    };
+
+    const compareProviders = sttCompareResults?.providers || [];
+    const funAsrDescriptor = compareProviders.find((provider) => provider.id === FUN_ASR_PROVIDER_ID) || null;
+    const primaryCompareProviderId = sttCompareResults?.primaryProviderId || currentSttProvider || null;
+    const primaryCompareDescriptor = compareProviders.find((provider) => provider.id === primaryCompareProviderId) || null;
+    const recentCompareUtterances = (sttCompareResults?.utterances || [])
+        .filter((utterance) => {
+            const primaryResult = primaryCompareProviderId ? utterance.providerResults[primaryCompareProviderId] : null;
+            const funAsrResult = utterance.providerResults[FUN_ASR_PROVIDER_ID];
+            return Boolean(primaryResult || funAsrResult);
+        })
+        .slice(-10)
+        .reverse();
+    const showFunAsrCompareBadge = Boolean(sttCompareResults?.active && funAsrDescriptor?.available);
+    const canOpenFunAsrCompare = Boolean(funAsrDescriptor?.available);
+
+    const renderCompareResultCard = (
+        title: string,
+        result: SttCompareProviderResultView | undefined,
+        toneClassName: string
+    ) => {
+        const displayText = result?.finalText?.trim() || result?.partialText?.trim() || '';
+        const statusLabel = result?.finalText?.trim()
+            ? '最终'
+            : result?.partialText?.trim()
+                ? '实时'
+                : '等待中';
 
         return (
-            <div key={msg.id} className={`flex ${isUserMessage ? 'justify-end' : 'justify-start'}`}>
-                <div
-                    className={[
-                        'group relative max-w-[92%] rounded-[22px] border px-4 py-3 text-[13px] leading-6 shadow-[0_10px_35px_rgba(0,0,0,0.16)]',
-                        isUserMessage
-                            ? 'border-blue-400/25 bg-blue-500/12 text-blue-50 rounded-tr-[6px]'
-                            : 'border-white/[0.08] bg-white/[0.04] text-slate-100 rounded-tl-[6px]'
-                    ].join(' ')}
+            <div className={`rounded-[16px] border px-3 py-3 ${toneClassName}`}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-200">{title}</div>
+                    <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[9px] uppercase tracking-[0.16em] text-slate-300">
+                        {statusLabel}
+                    </span>
+                </div>
+                <div className="min-h-[72px] whitespace-pre-wrap text-[13px] leading-6 text-slate-100">
+                    {displayText || <span className="text-slate-500">还没有转写内容。</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                    <span>首包：{formatCompareLatency(result?.firstPartialLatencyMs)}</span>
+                    <span>最终稿：{formatCompareLatency(result?.finalLatencyMs)}</span>
+                    {result?.termHits?.length ? (
+                        <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-1 text-emerald-200">
+                            热词：{result.termHits.slice(0, 3).join(', ')}
+                        </span>
+                    ) : null}
+                    {result?.errors?.[0] ? (
+                        <span className="rounded-full border border-red-400/20 bg-red-500/10 px-2 py-1 text-red-200">
+                            {result.errors[0]}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
+        );
+    };
+
+    const renderFunAsrComparePanel = () => (
+        <AnimatePresence>
+            {isFunAsrCompareOpen && (
+                <motion.aside
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 28 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="no-drag absolute inset-y-4 right-4 z-40 flex w-[380px] max-w-[calc(100%-32px)] flex-col overflow-hidden rounded-[22px] border border-cyan-400/20 bg-[#121212]/96 shadow-2xl shadow-black/45 backdrop-blur-xl"
                 >
-                    <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                        <span>{isUserMessage ? 'You' : 'Interviewer'}</span>
+                    <div className="border-b border-white/[0.08] px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                                    <Mic className="h-3.5 w-3.5" />
+                                    <span>Fun-ASR 对比</span>
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    实时对比 {primaryCompareDescriptor?.label || formatSttProviderLabel(primaryCompareProviderId)} 和 Fun-ASR 的转写结果。
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => void closeFunAsrComparePanel()}
+                                className="rounded-full border border-white/10 bg-black/30 p-1.5 text-slate-400 transition-colors hover:border-white/20 hover:bg-black/50 hover:text-white"
+                                title="关闭 Fun-ASR 对比"
+                            >
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.16em]">
+                            <span className={`rounded-full border px-2.5 py-1 ${sttCompareResults?.active ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/[0.04] text-slate-400'}`}>
+                                {sttCompareResults?.active ? '对比进行中' : '对比未启动'}
+                            </span>
+                            <span className={`rounded-full border px-2.5 py-1 ${isConnected ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100' : 'border-white/10 bg-white/[0.04] text-slate-400'}`}>
+                                {isConnected ? '会议音频已连接' : '会议未连接'}
+                            </span>
+                            {meetingGlossaryConfig?.funAsrVocabularyId ? (
+                                <span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-amber-100">
+                                    热词已同步
+                                </span>
+                            ) : null}
+                        </div>
+                        {funAsrDescriptor && !funAsrDescriptor.available && (
+                            <div className="mt-3 rounded-[14px] border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                                {funAsrDescriptor.reason || '运行 Fun-ASR 对比前，需要先配置阿里云 STT API 密钥。'}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4" style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}>
+                        <div className="space-y-4">
+                            <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] p-3">
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">热词表</div>
+                                        <p className="mt-1 text-xs text-slate-500">面试过程中可直接编辑，修改会从下一句开始生效。</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleSaveMeetingGlossary()}
+                                        disabled={meetingGlossarySaving}
+                                        className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${meetingGlossarySaved ? 'bg-emerald-500/20 text-emerald-300' : 'border border-white/10 bg-black/25 text-slate-200 hover:border-white/20 hover:bg-black/45'} ${meetingGlossarySaving ? 'cursor-wait opacity-80' : ''}`}
+                                    >
+                                        {meetingGlossarySaving ? '保存中...' : meetingGlossarySaved ? '已保存' : '保存'}
+                                    </button>
+                                </div>
+                                <textarea
+                                    value={meetingGlossaryText}
+                                    onChange={(event) => setMeetingGlossaryText(event.target.value)}
+                                    rows={6}
+                                    className="min-h-[124px] w-full rounded-[14px] border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400/30"
+                                    placeholder={'agent | 5\ntool calling | 5\nMCP | 5\nRAG | 5'}
+                                />
+                                {meetingGlossaryMessage && (
+                                    <div className={`mt-2 rounded-[12px] border px-3 py-2 text-xs leading-5 ${meetingGlossaryMessage.toLowerCase().includes('failed') || meetingGlossaryMessage.toLowerCase().includes('error') ? 'border-red-400/20 bg-red-500/10 text-red-200' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
+                                        {meetingGlossaryMessage}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">实时对比</div>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            同一份音频、同一份热词表，对比不同实时模型的表现。
+                                        </p>
+                                    </div>
+                                    <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                        {sttCompareResults?.summary?.totalUtterances || 0} 条话语
+                                    </span>
+                                </div>
+                            </div>
+
+                            {recentCompareUtterances.length > 0 ? recentCompareUtterances.map((utterance) => {
+                                const primaryResult = primaryCompareProviderId ? utterance.providerResults[primaryCompareProviderId] : undefined;
+                                const funAsrResult = utterance.providerResults[FUN_ASR_PROVIDER_ID];
+
+                                return (
+                                    <div key={utterance.id} className="rounded-[18px] border border-white/[0.08] bg-black/20 p-3">
+                                        <div className="mb-3 flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                                                <span>{utterance.speaker === 'user' ? '候选人' : '面试官'}</span>
+                                                <span className="h-1 w-1 rounded-full bg-white/20" />
+                                                <span>{formatCompareTimestamp(utterance.endedAt || utterance.startedAt)}</span>
+                                            </div>
+                                            <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[9px] uppercase tracking-[0.16em] text-slate-400">
+                                                {utterance.audioChunkCount} 个分片
+                                            </span>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {renderCompareResultCard(
+                                                primaryCompareDescriptor?.label || formatSttProviderLabel(primaryCompareProviderId) || '当前主模型',
+                                                primaryResult,
+                                                'border-white/10 bg-white/[0.03]'
+                                            )}
+                                            {renderCompareResultCard(
+                                                funAsrDescriptor?.label || 'Fun-ASR 实时版',
+                                                funAsrResult,
+                                                'border-cyan-400/20 bg-cyan-500/[0.08]'
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            }) : (
+                                <div className="rounded-[18px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-6 text-slate-500">
+                                    {canOpenFunAsrCompare
+                                        ? '在实时面试中打开这个面板，就能并排查看当前主模型和 Fun-ASR 的实时转写。'
+                                        : '请先配置阿里云 STT API 密钥，再重新打开这个面板来运行 Fun-ASR 对比。'}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </motion.aside>
+            )}
+        </AnimatePresence>
+    );
+
+    const resolveTracePaneValue = (tab: TraceDetailTab) => {
+        if (tab === 'resolved_input') {
+            if (!selectedTraceAction?.resolvedInput) return '当前还没有记录到解析后的输入。';
+            return selectedTraceAction.resolvedInput;
+        }
+
+        if (!selectedTraceStep) {
+            return tab === 'request' ? '当前还没有选中的步骤。' : '当前还没有记录到响应内容。';
+        }
+
+        if (tab === 'request') {
+            const payload = {
+                url: selectedTraceStep.url,
+                method: selectedTraceStep.method,
+                provider: selectedTraceStep.provider,
+                model: selectedTraceStep.model,
+                lane: selectedTraceStep.lane,
+                headers: parseTraceJson(selectedTraceStep.requestHeaders),
+                body: parseTraceJson(selectedTraceStep.requestBody || ''),
+            };
+            return payload;
+        }
+
+        return {
+            status: selectedTraceStep.responseStatus,
+            durationMs: selectedTraceStep.durationMs,
+            error: selectedTraceStep.error,
+            headers: parseTraceJson(selectedTraceStep.responseHeaders),
+            body: parseTraceJson(selectedTraceStep.responseBody || ''),
+        };
+    };
+
+    const renderTraceValue = (value: unknown, depth: number = 0, path: string = 'root'): React.ReactNode => {
+        const indentStyle = { paddingLeft: `${depth * 14}px` };
+
+        if (value === null) {
+            return <span className="text-slate-500">null</span>;
+        }
+
+        if (typeof value === 'undefined') {
+            return <span className="text-slate-500">undefined</span>;
+        }
+
+        if (typeof value === 'string') {
+            return (
+                <div className="min-w-0 whitespace-pre-wrap break-words text-emerald-100">
+                    &quot;{normalizeTraceStringForDisplay(value)}&quot;
+                </div>
+            );
+        }
+
+        if (typeof value === 'number' || typeof value === 'boolean') {
+            return <span className="text-cyan-200">{String(value)}</span>;
+        }
+
+        if (Array.isArray(value)) {
+            if (value.length === 0) {
+                return <span className="text-slate-400">[]</span>;
+            }
+
+            return (
+                <div className="space-y-1">
+                    <div style={indentStyle} className="text-slate-500">[</div>
+                    {value.map((entry, index) => (
+                        <div key={`${path}[${index}]`} style={{ paddingLeft: `${(depth + 1) * 14}px` }} className="min-w-0">
+                            {renderTraceValue(entry, depth + 1, `${path}[${index}]`)}
+                        </div>
+                    ))}
+                    <div style={indentStyle} className="text-slate-500">]</div>
+                </div>
+            );
+        }
+
+        if (typeof value === 'object') {
+            const entries = Object.entries(value as Record<string, unknown>);
+            if (entries.length === 0) {
+                return <span className="text-slate-400">{'{}'}</span>;
+            }
+
+            return (
+                <div className="space-y-1">
+                    <div style={indentStyle} className="text-slate-500">{'{'}</div>
+                    {entries.map(([key, entryValue]) => (
+                        <div key={`${path}.${key}`} style={{ paddingLeft: `${(depth + 1) * 14}px` }} className="min-w-0">
+                            <div className="flex min-w-0 items-start gap-2">
+                                <span className="shrink-0 text-sky-300">&quot;{key}&quot;:</span>
+                                <div className="min-w-0 flex-1">
+                                    {renderTraceValue(entryValue, depth + 1, `${path}.${key}`)}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    <div style={indentStyle} className="text-slate-500">{'}'}</div>
+                </div>
+            );
+        }
+
+        return <span className="text-slate-400">{String(value)}</span>;
+    };
+
+    const renderConversationDocumentBlock = (msg: Message) => {
+        const isUserMessage = msg.role === 'user';
+        const segmentId = msg.liveTranscriptSegmentId;
+        const isEditableLiveTranscript = Boolean(segmentId);
+        const currentDraft = segmentId ? (transcriptDrafts[segmentId] ?? msg.text) : msg.text;
+        const saveState = segmentId ? (transcriptSaveStates[segmentId] || 'idle') : 'idle';
+        const hasUnsavedDraft = Boolean(
+            segmentId &&
+            normalizeTranscriptForComparison(currentDraft) !== normalizeTranscriptForComparison(msg.text)
+        );
+
+        return (
+            <div key={msg.id} className="border-b border-white/[0.06] py-4 last:border-b-0">
+                <div className={`rounded-[16px] border-l-2 px-4 py-2 ${isUserMessage ? 'border-emerald-400/35' : 'border-slate-400/20'}`}>
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <span>{isUserMessage ? '我' : '面试官'}</span>
                         {msg.isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                        {msg.transcriptStatus === 'active' && (
+                            <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-emerald-200">
+                                实时
+                            </span>
+                        )}
+                        {msg.edited && (
+                            <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-amber-200">
+                                已编辑
+                            </span>
+                        )}
+                        {hasUnsavedDraft && (
+                            <span className="rounded-full border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-sky-200">
+                                待保存
+                            </span>
+                        )}
+                        {saveState === 'saving' && (
+                            <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-cyan-200">
+                                保存中
+                            </span>
+                        )}
+                        {saveState === 'saved' && (
+                            <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-emerald-200">
+                                已保存
+                            </span>
+                        )}
+                        {saveState === 'error' && (
+                            <span className="rounded-full border border-red-400/20 bg-red-400/10 px-1.5 py-0.5 text-[9px] tracking-[0.12em] text-red-200">
+                                保存失败
+                            </span>
+                        )}
                         {msg.hasScreenshot && <Image className="h-3 w-3 text-slate-400/80" />}
                     </div>
+
                     {msg.hasScreenshot && msg.screenshotPreview && (
                         <img
                             src={msg.screenshotPreview}
-                            alt="Attached screenshot"
+                            alt="已附加截图"
                             className="mb-3 max-h-24 rounded-xl border border-white/10 object-cover"
                         />
                     )}
-                    {renderMessageText(msg)}
+
+                    {isEditableLiveTranscript && segmentId ? (
+                        <textarea
+                            ref={registerTranscriptTextarea(segmentId)}
+                            data-transcript-segment-id={segmentId}
+                            rows={1}
+                            value={currentDraft}
+                            spellCheck={false}
+                            onFocus={() => {
+                                captureTranscriptSelection(segmentId, transcriptTextareaRefs.current.get(segmentId) || null);
+                            }}
+                            onClick={(event) => captureTranscriptSelection(segmentId, event.currentTarget)}
+                            onSelect={(event) => captureTranscriptSelection(segmentId, event.currentTarget)}
+                            onChange={(event) => {
+                                updateTranscriptDraft(segmentId, event.target.value);
+                                dirtyTranscriptIdsRef.current.add(segmentId);
+                                captureTranscriptSelection(segmentId, event.currentTarget);
+                                autoSizeTranscriptTextarea(event.currentTarget);
+                                scheduleTranscriptDraftSave(segmentId);
+                            }}
+                            onKeyDown={(event) => {
+                                captureTranscriptSelection(segmentId, event.currentTarget);
+                                if (
+                                    event.key === 'Backspace' &&
+                                    !event.metaKey &&
+                                    !event.ctrlKey &&
+                                    !event.altKey &&
+                                    !event.shiftKey &&
+                                    event.currentTarget.selectionStart === 0 &&
+                                    event.currentTarget.selectionEnd === 0 &&
+                                    canMergeTranscriptSegmentWithPrevious(segmentId)
+                                ) {
+                                    event.preventDefault();
+                                    void mergeTranscriptSegmentWithPrevious(segmentId);
+                                }
+                            }}
+                            onKeyUp={(event) => captureTranscriptSelection(segmentId, event.currentTarget)}
+                            onBlur={() => {
+                                if (focusedTranscriptSegmentIdRef.current === segmentId) {
+                                    clearFocusedTranscriptSelection();
+                                }
+                                void persistTranscriptDraft(segmentId, { immediate: true, scheduleRagSync: true });
+                            }}
+                            className="min-h-[32px] w-full resize-none overflow-hidden bg-transparent p-0 text-[13px] leading-7 text-slate-100 outline-none placeholder:text-slate-500"
+                        />
+                    ) : (
+                        <div className="text-[13px] leading-7 text-slate-100">
+                            {renderMessageText(msg)}
+                        </div>
+                    )}
                 </div>
             </div>
         );
     };
 
     const getRecommendationMeta = (msg: Message) => {
-        if (msg.text.startsWith('Error:') || msg.text.startsWith('❌')) {
+        if (msg.text.startsWith('Error:') || msg.text.startsWith('错误：') || msg.text.startsWith('❌')) {
             return {
-                title: 'Error',
+                title: '错误',
                 accent: 'text-rose-300',
                 icon: <X className="h-3.5 w-3.5" />
             };
@@ -2164,31 +3831,31 @@ Provide only the answer, nothing else.`;
         switch (msg.intent) {
             case 'what_to_answer':
                 return {
-                    title: msg.isStreaming ? 'Drafting answer' : 'Suggested answer',
+                    title: msg.isStreaming ? '答案生成中' : '推荐答案',
                     accent: 'text-emerald-300',
                     icon: <Pencil className="h-3.5 w-3.5" />
                 };
             case 'shorten':
                 return {
-                    title: 'Shortened version',
+                    title: '精简版',
                     accent: 'text-cyan-300',
                     icon: <MessageSquare className="h-3.5 w-3.5" />
                 };
             case 'recap':
                 return {
-                    title: 'Recap',
+                    title: '总结',
                     accent: 'text-indigo-300',
                     icon: <RefreshCw className="h-3.5 w-3.5" />
                 };
             case 'follow_up_questions':
                 return {
-                    title: 'Follow-up questions',
+                    title: '追问建议',
                     accent: 'text-amber-300',
                     icon: <HelpCircle className="h-3.5 w-3.5" />
                 };
             default:
                 return {
-                    title: msg.isStreaming ? 'Generating' : 'Recommendation',
+                    title: msg.isStreaming ? '生成中' : '推荐答案',
                     accent: 'text-emerald-300',
                     icon: <Sparkles className="h-3.5 w-3.5" />
                 };
@@ -2250,17 +3917,46 @@ Provide only the answer, nothing else.`;
 
     const renderRecommendationBubble = (msg: Message) => {
         const meta = getRecommendationMeta(msg);
+        const lane = normalizeLane(msg.lane);
+        const isSelectedLane = lane === activeRecommendationLane;
 
         return (
-            <div key={msg.id} className="group relative rounded-[22px] border border-white/[0.08] bg-white/[0.04] px-4 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.16)]">
+            <div
+                key={msg.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActiveRecommendationLane(lane)}
+                onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setActiveRecommendationLane(lane);
+                    }
+                }}
+                className={[
+                    'group relative w-full rounded-[22px] border bg-white/[0.04] px-4 py-3 text-left shadow-[0_10px_35px_rgba(0,0,0,0.16)] transition-colors',
+                    isSelectedLane
+                        ? 'border-emerald-400/35 ring-1 ring-emerald-400/20'
+                        : 'border-white/[0.08] hover:border-white/15'
+                ].join(' ')}
+            >
                 <div className="mb-2 flex items-center justify-between gap-3">
-                    <div className={`flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${meta.accent}`}>
-                        {meta.icon}
-                        <span>{meta.title}</span>
+                    <div className="min-w-0">
+                        <div className={`flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${meta.accent}`}>
+                            {meta.icon}
+                            <span>{meta.title}</span>
+                        </div>
+                        {(msg.modelLabel || msg.modelId || lane === 'strong') && (
+                            <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                {msg.modelLabel || msg.modelId || (lane === 'strong' ? 'Current default model' : 'Current route')}
+                            </div>
+                        )}
                     </div>
                     {!msg.isStreaming && (
                         <button
-                            onClick={() => handleCopy(msg.text)}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                handleCopy(msg.text);
+                            }}
                             className="rounded-md bg-black/35 p-1.5 text-slate-400 opacity-0 transition-opacity hover:bg-black/60 hover:text-white group-hover:opacity-100"
                         >
                             <Copy className="h-3.5 w-3.5" />
@@ -2275,7 +3971,7 @@ Provide only the answer, nothing else.`;
     return (
         <div
             ref={contentRef}
-            style={{ width: panelSize.width, height: panelSize.height }}
+            style={isOverlayMaximized ? { width: '100vw', height: '100vh' } : { width: panelSize.width, height: panelSize.height }}
             className="mx-auto flex min-h-0 flex-col items-center gap-2 bg-transparent font-sans text-slate-200"
         >
             <AnimatePresence>
@@ -2289,63 +3985,68 @@ Provide only the answer, nothing else.`;
                     >
                         <TopPill
                             expanded={isExpanded}
+                            isMaximized={isOverlayMaximized}
                             onToggle={() => setIsExpanded(!isExpanded)}
+                            onToggleMaximize={() => void toggleOverlayMaximize()}
                             onQuit={() => onEndMeeting ? onEndMeeting() : window.electronAPI.quitApp()}
                         />
 
                         <div className="draggable-area relative flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#1E1E1E]/95 shadow-2xl shadow-black/40 backdrop-blur-2xl">
-                            {(rollingTranscript || isInterviewerSpeaking) && showTranscript && (
-                                <RollingTranscript
-                                    text={rollingTranscript}
-                                    isActive={isInterviewerSpeaking}
-                                />
-                            )}
-
                             <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4">
                                 {hasOverlayContent ? (
                                     <div className="flex h-full min-h-0 gap-4">
                                         <section className="relative flex h-full min-h-0 min-w-0 flex-[1.15] flex-col overflow-hidden rounded-[22px] border border-white/[0.08] bg-black/15">
                                             <div className="border-b border-white/[0.08] px-4 py-3">
-                                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                                                    <MessageSquare className="h-3.5 w-3.5" />
-                                                    <span>Conversation</span>
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                                                        <MessageSquare className="h-3.5 w-3.5" />
+                                                        <span>对话</span>
+                                                    </div>
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        {shouldShowCurrentSttProvider && (
+                                                            <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200">
+                                                                <Mic className="h-3 w-3" />
+                                                                <span>STT · {formatSttProviderLabel(currentSttProvider)}</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                                            自动保存 · Ctrl/Cmd+S
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <p className="mt-1 text-xs text-slate-500">Interviewer and your replies stay together here.</p>
+                                                <p className="mt-1 text-xs text-slate-500">面试官提问和你的回答会一起显示在这里。</p>
                                             </div>
 
                                             <div
                                                 ref={conversationScrollRef}
+                                                onPointerDownCapture={handleConversationPointerDownCapture}
                                                 onScroll={handleConversationScroll}
                                                 className="min-h-0 flex-1 overflow-y-auto px-4 py-4 no-drag"
-                                                style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}
+                                                style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain', overflowAnchor: 'none' }}
                                             >
-                                                <div className="space-y-3">
+                                                <div className="space-y-0">
                                                     {displayedConversationMessages.length === 0 && !isManualRecording ? (
                                                         <div className="rounded-[18px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-6 text-slate-500">
-                                                            The conversation transcript will appear here as soon as the interviewer or your microphone produces text.
+                                                            面试官或你的麦克风一旦产出转写，这里就会开始显示完整对话。
                                                         </div>
                                                     ) : (
-                                                        displayedConversationMessages.map(renderConversationBubble)
+                                                        displayedConversationMessages.map(renderConversationDocumentBlock)
                                                     )}
 
-                                                    {isManualRecording && (
-                                                        <div className="flex justify-end">
-                                                            <div className="max-w-[92%] rounded-[22px] rounded-tr-[6px] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-[13px] leading-6 text-emerald-100 shadow-[0_10px_35px_rgba(0,0,0,0.16)]">
+                                                    {isManualRecording && recordingUserTranscriptSegments.length === 0 && (
+                                                        <div className="border-b border-white/[0.06] py-4 last:border-b-0">
+                                                            <div className="rounded-[16px] border-l-2 border-emerald-400/35 px-4 py-2">
                                                                 <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
                                                                     <Mic className="h-3.5 w-3.5" />
-                                                                    <span>Voice input</span>
+                                                                    <span>语音输入</span>
                                                                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                                                                 </div>
-                                                                {liveUserTranscript ? (
-                                                                    <div className="whitespace-pre-wrap">{liveUserTranscript}</div>
-                                                                ) : (
-                                                                    <div className="flex items-center gap-1.5 py-1 text-emerald-300/75">
-                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                                                                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                                                                        <span className="ml-1 text-[11px] uppercase tracking-[0.18em]">Listening</span>
-                                                                    </div>
-                                                                )}
+                                                                <div className="flex items-center gap-1.5 py-1 text-[13px] leading-7 text-emerald-100/80">
+                                                                    <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                                    <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                                    <div className="h-2 w-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                                                                    <span className="ml-1 text-[11px] uppercase tracking-[0.18em]">监听中</span>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     )}
@@ -2360,18 +4061,32 @@ Provide only the answer, nothing else.`;
                                                     className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-lg shadow-black/30 transition-all hover:border-white/20 hover:bg-black/80 hover:text-white"
                                                 >
                                                     <ChevronDown className="h-3.5 w-3.5" />
-                                                    <span>Latest</span>
+                                                    <span>最新</span>
                                                 </button>
                                             )}
                                         </section>
 
-                                        <section className="relative flex h-full min-h-0 min-w-[360px] flex-[0.95] flex-col overflow-hidden rounded-[22px] border border-white/[0.08] bg-black/15">
+                                        <section className={`relative flex h-full min-h-0 min-w-[340px] flex-[0.92] flex-col overflow-hidden rounded-[22px] border bg-black/15 ${activeRecommendationLane === 'primary' ? 'border-emerald-400/25 ring-1 ring-emerald-400/10' : 'border-white/[0.08]'}`}>
                                             <div className="border-b border-white/[0.08] px-4 py-3">
-                                                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300/90">
-                                                    <Sparkles className="h-3.5 w-3.5" />
-                                                    <span>LLM recommendation</span>
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300/90">
+                                                            <Sparkles className="h-3.5 w-3.5" />
+                                                            <span>LLM 推荐</span>
+                                                        </div>
+                                                        <p className="mt-1 text-xs text-slate-500">快速返回的当前推荐通道。</p>
+                                                    </div>
+                                                    {activeRecommendationLane === 'primary' && (
+                                                        <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
+                                                            当前目标
+                                                        </span>
+                                                    )}
                                                 </div>
-                                                <p className="mt-1 text-xs text-slate-500">Recommended answers stay compact on the right.</p>
+                                                {(primaryLaneState.modelLabel || primaryLaneState.modelId) && (
+                                                    <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                                        {primaryLaneState.modelLabel || primaryLaneState.modelId}
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <div
@@ -2381,19 +4096,19 @@ Provide only the answer, nothing else.`;
                                                 style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}
                                             >
                                                 <div className="space-y-3">
-                                                    {recommendationMessages.length === 0 && !isProcessing ? (
+                                                    {primaryRecommendationMessages.length === 0 && !(isProcessing || primaryLaneState.status === 'started' || primaryLaneState.status === 'streaming') ? (
                                                         <div className="rounded-[18px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-6 text-slate-500">
-                                                            Click "How to answer" and recommendations will show up here.
+                                                            点击“怎么回答”后，主推荐答案会显示在这里。
                                                         </div>
                                                     ) : (
-                                                        recommendationMessages.map(renderRecommendationBubble)
+                                                        primaryRecommendationMessages.map(renderRecommendationBubble)
                                                     )}
 
-                                                    {isProcessing && recommendationMessages.length === 0 && (
+                                                    {(isProcessing || primaryLaneState.status === 'started' || primaryLaneState.status === 'streaming') && primaryRecommendationMessages.length === 0 && (
                                                         <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.03] px-4 py-4">
                                                             <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
                                                                 <Sparkles className="h-3.5 w-3.5" />
-                                                                <span>Generating</span>
+                                                                <span>生成中</span>
                                                             </div>
                                                             <div className="flex gap-1.5">
                                                                 <div className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -2413,52 +4128,567 @@ Provide only the answer, nothing else.`;
                                                     className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-lg shadow-black/30 transition-all hover:border-white/20 hover:bg-black/80 hover:text-white"
                                                 >
                                                     <ChevronDown className="h-3.5 w-3.5" />
-                                                    <span>Latest</span>
+                                                    <span>最新</span>
                                                 </button>
                                             )}
                                         </section>
+
+                                        {effectiveStrongPanelExpanded ? (
+                                            <section className={`relative flex h-full min-h-0 min-w-[320px] flex-[0.84] flex-col overflow-hidden rounded-[22px] border bg-black/15 no-drag ${activeRecommendationLane === 'strong' ? 'border-cyan-400/25 ring-1 ring-cyan-400/10' : 'border-white/[0.08]'}`}>
+                                                <div className="border-b border-white/[0.08] px-4 py-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300/90">
+                                                                <Sparkles className="h-3.5 w-3.5" />
+                                                                <span>强模型答案</span>
+                                                            </div>
+                                                            <p className="mt-1 text-xs text-slate-500">
+                                                                默认强模型通道的常驻区域。
+                                                            </p>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            {activeRecommendationLane === 'strong' && (
+                                                                <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-100">
+                                                                    当前目标
+                                                                </span>
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setStrongPanelExpanded(false)}
+                                                                className="rounded-full border border-white/10 bg-black/30 p-1.5 text-slate-400 transition-colors hover:border-white/20 hover:bg-black/50 hover:text-white"
+                                                                title="收起强模型面板"
+                                                            >
+                                                                <ChevronRight className="h-3.5 w-3.5" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    {(strongLaneState.modelLabel || strongLaneState.modelId) && (
+                                                        <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                                            {strongLaneState.modelLabel || strongLaneState.modelId}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 no-drag" style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}>
+                                                    <div className="space-y-3">
+                                                        <div className={`rounded-[18px] border px-4 py-4 ${strongLaneStatusCard.tone}`}>
+                                                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em]">
+                                                                {strongLaneStatusCard.label}
+                                                            </div>
+                                                            <div className="text-sm leading-6">
+                                                                {strongLaneStatusCard.description}
+                                                            </div>
+                                                        </div>
+
+                                                        {strongRecommendationMessages.map(renderRecommendationBubble)}
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        ) : (
+                                            <div className={`flex h-full w-12 flex-col overflow-hidden rounded-[22px] border bg-black/15 no-drag ${shouldForceStrongCollapse ? 'border-cyan-400/20' : 'border-white/[0.08]'}`}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!shouldForceStrongCollapse) {
+                                                            setStrongPanelExpanded(true);
+                                                        }
+                                                    }}
+                                                    disabled={shouldForceStrongCollapse}
+                                                    className={`flex h-full flex-col items-center justify-center gap-3 transition-colors ${shouldForceStrongCollapse ? 'cursor-not-allowed text-slate-600' : 'text-slate-400 hover:bg-white/[0.03] hover:text-white'}`}
+                                                    title={shouldForceStrongCollapse ? '请先拉宽窗口，再展开强模型通道。' : '展开强模型答案面板'}
+                                                >
+                                                    <ChevronLeft className="h-4 w-4" />
+                                                    <span className="-rotate-90 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em]">
+                                                        强模型
+                                                    </span>
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {false && (traceDrawerOpen ? (
+                                            <section className="relative flex h-full min-h-0 min-w-[360px] flex-[0.96] flex-col overflow-hidden rounded-[22px] border border-cyan-400/20 bg-black/15 no-drag">
+                                                <div className="border-b border-white/[0.08] px-4 py-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                                                                <Code className="h-3.5 w-3.5" />
+                                                                <span>调用链</span>
+                                                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] tracking-[0.12em] text-slate-400">
+                                                                    {traceActions.length}
+                                                                </span>
+                                                            </div>
+                                                            <p className="mt-1 text-xs text-slate-500">
+                                                                展示每次面试动作对应的原始请求、响应和解析后输入。
+                                                            </p>
+                                                            {traceInfo && (
+                                                                <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                                                                    会话 {traceInfo?.sessionId.slice(-6)}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleOpenTraceFolder}
+                                                                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                            >
+                                                                <FolderOpen className="h-3.5 w-3.5" />
+                                                                <span>打开目录</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleClearTraceSession}
+                                                                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-200"
+                                                            >
+                                                                <Trash2 className="h-3.5 w-3.5" />
+                                                                <span>清空会话</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setTraceDrawerOpen(false)}
+                                                                className="rounded-full border border-white/10 bg-black/30 p-1.5 text-slate-400 transition-colors hover:border-white/20 hover:bg-black/50 hover:text-white"
+                                                                title="收起调用链面板"
+                                                            >
+                                                                <ChevronRight className="h-3.5 w-3.5" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(0,1fr)]">
+                                                    <div className="min-h-0 overflow-y-auto border-r border-white/[0.08] p-3 no-drag" style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}>
+                                                        <div className="space-y-2">
+                                                            {isTraceLoading ? (
+                                                                <div className="rounded-[16px] border border-white/10 bg-white/[0.03] px-3 py-4 text-xs text-slate-400">
+                                                                    正在加载调用链记录...
+                                                                </div>
+                                                            ) : traceActions.length > 0 ? (
+                                                                traceActions.map((action) => (
+                                                                    <button
+                                                                        key={action.id}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setSelectedTraceActionId(action.id);
+                                                                            setSelectedTraceStepId(action.steps[action.steps.length - 1]?.id || null);
+                                                                        }}
+                                                                        className={`w-full rounded-[16px] border px-3 py-3 text-left transition-colors ${selectedTraceAction?.id === action.id
+                                                                            ? 'border-emerald-400/25 bg-emerald-500/10'
+                                                                            : 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'}`}
+                                                                    >
+                                                                        <div className="mb-2 flex items-center justify-between gap-2">
+                                                                            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                                                                {action.label}
+                                                                            </span>
+                                                                            <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${action.status === 'error'
+                                                                                ? 'bg-red-500/10 text-red-300'
+                                                                                : action.status === 'completed'
+                                                                                    ? 'bg-emerald-500/10 text-emerald-300'
+                                                                                    : 'bg-amber-500/10 text-amber-300'}`}>
+                                                                                {formatTraceStatusLabel(action.status)}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="text-xs text-slate-200 line-clamp-2">
+                                                                            {formatTraceActionTypeLabel(action.type)}
+                                                                        </div>
+                                                                        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+                                                                            <span>{formatTraceTimestamp(action.startedAt)}</span>
+                                                                            <span>{action.steps.length} 个步骤</span>
+                                                                        </div>
+                                                                    </button>
+                                                                ))
+                                                            ) : (
+                                                                    <div className="rounded-[16px] border border-dashed border-white/10 bg-white/[0.02] px-3 py-4 text-xs leading-5 text-slate-500">
+                                                                    暂时还没有调用链记录。触发“怎么回答”“作答”“总结”等面试动作后，这里会自动出现内容。
+                                                                    </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex min-h-0 min-w-0 flex-col">
+                                                        {selectedTraceAction ? (
+                                                            <>
+                                                                <div className="border-b border-white/[0.08] px-4 py-3">
+                                                                    <div className="flex items-center justify-between gap-3">
+                                                                        <div className="min-w-0">
+                                                                            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                                                                                {selectedTraceAction.label}
+                                                                            </div>
+                                                                            <div className="mt-1 text-xs text-slate-500">
+                                                                                {selectedTraceAction.requestId ? `请求 ID：${selectedTraceAction.requestId}` : formatTraceActionTypeLabel(selectedTraceAction.type)}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="text-right text-[11px] text-slate-500">
+                                                                            <div>{formatTraceTimestamp(selectedTraceAction.startedAt)}</div>
+                                                                            <div>{selectedTraceAction.endedAt ? formatTraceTimestamp(selectedTraceAction.endedAt) : '运行中'}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="no-drag flex gap-2 overflow-x-auto border-b border-white/[0.08] px-4 py-3" style={{ scrollbarWidth: 'thin' }}>
+                                                                    {selectedTraceAction.steps.length > 0 ? selectedTraceAction.steps.map((step) => (
+                                                                        <button
+                                                                            key={step.id}
+                                                                            type="button"
+                                                                            onClick={() => setSelectedTraceStepId(step.id)}
+                                                                            className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] transition-colors ${selectedTraceStep?.id === step.id
+                                                                                ? 'border-cyan-400/25 bg-cyan-500/10 text-cyan-100'
+                                                                                : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/20 hover:text-white'}`}
+                                                                        >
+                                                                            {step.lane ? `${step.lane} 路 ` : ''}{step.stage}{step.provider ? ` 路 ${step.provider}` : ''}
+                                                                        </button>
+                                                                    )) : (
+                                                                        <div className="text-xs text-slate-500">暂时还没有采集到传输步骤。</div>
+                                                                    )}
+                                                                </div>
+
+                                                                <div className="flex items-center gap-2 border-b border-white/[0.08] px-4 py-2">
+                                                                    {(['request', 'response', 'resolved_input'] as TraceDetailTab[]).map((tab) => (
+                                                                        <button
+                                                                            key={tab}
+                                                                            type="button"
+                                                                            onClick={() => setTraceDetailTab(tab)}
+                                                                            className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] transition-colors ${traceDetailTab === tab
+                                                                                ? 'bg-white/10 text-white'
+                                                                                : 'text-slate-500 hover:text-slate-300'}`}
+                                                                        >
+                                                                            {tab === 'resolved_input' ? '解析后输入' : tab === 'request' ? '请求' : '响应'}
+                                                                        </button>
+                                                                    ))}
+                                                                    {selectedTraceStep && (
+                                                                        <div className="ml-auto flex items-center gap-3 text-[11px] text-slate-500">
+                                                                            <span>{selectedTraceStep.method || '--'}</span>
+                                                                            <span>{formatTraceDuration(selectedTraceStep.durationMs)}</span>
+                                                                            {selectedTraceStep.responseStatus && <span>HTTP {selectedTraceStep.responseStatus}</span>}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+
+                                                                {traceError && (
+                                                                    <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+                                                                        {traceError}
+                                                                    </div>
+                                                                )}
+
+                                                                <div className="no-drag min-h-0 flex-1 overflow-auto px-4 py-3 font-mono text-[11px] leading-5 text-slate-300" style={{ scrollbarWidth: 'thin', overscrollBehavior: 'contain' }}>
+                                                                    {renderTraceValue(resolveTracePaneValue(traceDetailTab))}
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="flex h-full items-center justify-center px-6 text-sm text-slate-500">
+                                                                请选择一条调用链记录，以查看它的请求、响应和解析后输入。
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        ) : (
+                                            <div className="flex h-full w-12 flex-col overflow-hidden rounded-[22px] border border-white/[0.08] bg-black/15 no-drag">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setTraceDrawerOpen(true)}
+                                                    className="flex h-full flex-col items-center justify-center gap-3 text-slate-400 transition-colors hover:bg-white/[0.03] hover:text-white"
+                                                    title="展开调用链面板"
+                                                >
+                                                    <Code className="h-4 w-4" />
+                                                    <span className="-rotate-90 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.18em]">
+                                                        调用链
+                                                    </span>
+                                                </button>
+                                            </div>
+                                        ))}
                                     </div>
                                 ) : (
                                     <div className="flex h-full items-center justify-center px-6 py-8">
                                         <div className="max-w-xl rounded-[22px] border border-dashed border-white/10 bg-white/[0.02] px-6 py-8 text-center text-sm leading-6 text-slate-500">
-                                            Start the interview and let the system audio or your microphone produce text. The conversation will stay on the left, and the recommended answer will stay on the right.
+                                            开始面试后，让系统音频或麦克风先产生转写。左侧是对话，中间是主推荐，右侧是强模型答案。
                                         </div>
                                     </div>
                                 )}
                             </div>
 
-                            <div className={`flex flex-nowrap items-center justify-center gap-1.5 overflow-x-hidden px-4 pb-3 ${rollingTranscript && showTranscript ? 'pt-1' : 'pt-3'}`}>
-                                <button onClick={handleWhatToSay} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
-                                    <Pencil className="mr-1.5 inline h-3 w-3 opacity-70" /> How to answer
-                                </button>
-                                <button onClick={() => handleFollowUp('shorten')} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
-                                    <MessageSquare className="mr-1.5 inline h-3 w-3 opacity-70" /> Shorten
-                                </button>
-                                <button onClick={handleRecap} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
-                                    <RefreshCw className="mr-1.5 inline h-3 w-3 opacity-70" /> Recap
-                                </button>
-                                <button onClick={handleFollowUpQuestions} className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
-                                    <HelpCircle className="mr-1.5 inline h-3 w-3 opacity-70" /> Follow-up
+                            {false && (
+                            <div className="px-4 pb-3">
+                                <div className="overflow-hidden rounded-[20px] border border-white/[0.08] bg-black/15">
+                                    <div className="flex items-center justify-between gap-3 px-4 py-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setTraceDrawerOpen(prev => !prev)}
+                                            className="flex items-center gap-2 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition-colors hover:text-white"
+                                        >
+                                            <Code className="h-3.5 w-3.5" />
+                                            <span>调用链</span>
+                                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] tracking-[0.12em] text-slate-400">
+                                                {traceActions.length}
+                                            </span>
+                                            {traceDrawerOpen ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+                                        </button>
+
+                                        <div className="flex items-center gap-2">
+                                            {traceInfo && (
+                                                <span className="hidden rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-500 md:inline-flex">
+                                                    会话 {traceInfo?.sessionId.slice(-6)}
+                                                </span>
+                                            )}
+                                            {traceDrawerOpen && (
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleOpenTraceFolder}
+                                                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                                                    >
+                                                        <FolderOpen className="h-3.5 w-3.5" />
+                                                        <span>打开目录</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleClearTraceSession}
+                                                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-200"
+                                                    >
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                        <span>清空会话</span>
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {traceDrawerOpen && (
+                                        <div className="grid h-[270px] min-h-0 grid-cols-[260px_minmax(0,1fr)] border-t border-white/[0.08]">
+                                            <div className="min-h-0 overflow-y-auto border-r border-white/[0.08] p-3">
+                                                <div className="space-y-2">
+                                                    {isTraceLoading ? (
+                                                        <div className="rounded-[16px] border border-white/10 bg-white/[0.03] px-3 py-4 text-xs text-slate-400">
+                                                            正在加载调用链记录...
+                                                        </div>
+                                                    ) : traceActions.length > 0 ? (
+                                                        traceActions.map((action) => (
+                                                            <button
+                                                                key={action.id}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSelectedTraceActionId(action.id);
+                                                                    setSelectedTraceStepId(action.steps[action.steps.length - 1]?.id || null);
+                                                                }}
+                                                                className={`w-full rounded-[16px] border px-3 py-3 text-left transition-colors ${selectedTraceAction?.id === action.id
+                                                                    ? 'border-emerald-400/25 bg-emerald-500/10'
+                                                                    : 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'}`}
+                                                            >
+                                                                <div className="mb-2 flex items-center justify-between gap-2">
+                                                                    <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                                                        {action.label}
+                                                                    </span>
+                                                                    <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] ${action.status === 'error'
+                                                                        ? 'bg-red-500/10 text-red-300'
+                                                                        : action.status === 'completed'
+                                                                            ? 'bg-emerald-500/10 text-emerald-300'
+                                                                            : 'bg-amber-500/10 text-amber-300'}`}>
+                                                                        {action.status}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="text-xs text-slate-200 line-clamp-2">
+                                                                            {formatTraceActionTypeLabel(action.type)}
+                                                                </div>
+                                                                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+                                                                    <span>{formatTraceTimestamp(action.startedAt)}</span>
+                                                                            <span>{action.steps.length} 个步骤</span>
+                                                                </div>
+                                                            </button>
+                                                        ))
+                                                    ) : (
+                                                        <div className="rounded-[16px] border border-dashed border-white/10 bg-white/[0.02] px-3 py-4 text-xs leading-5 text-slate-500">
+                                                            还没有调用链记录。先触发“怎么回答”“作答”“总结”等动作，这里就会开始出现内容。
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex min-h-0 min-w-0 flex-col">
+                                                {selectedTraceAction ? (
+                                                    <>
+                                                        <div className="border-b border-white/[0.08] px-4 py-3">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                                                                        {selectedTraceAction.label}
+                                                                    </div>
+                                                                    <div className="mt-1 text-xs text-slate-500">
+                                                                        {selectedTraceAction.requestId ? `请求 ID：${selectedTraceAction.requestId}` : formatTraceActionTypeLabel(selectedTraceAction.type)}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-right text-[11px] text-slate-500">
+                                                                    <div>{formatTraceTimestamp(selectedTraceAction.startedAt)}</div>
+                                                                    <div>{selectedTraceAction.endedAt ? formatTraceTimestamp(selectedTraceAction.endedAt) : '运行中'}</div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="flex gap-2 overflow-x-auto border-b border-white/[0.08] px-4 py-3">
+                                                            {selectedTraceAction.steps.length > 0 ? selectedTraceAction.steps.map((step) => (
+                                                                <button
+                                                                    key={step.id}
+                                                                    type="button"
+                                                                    onClick={() => setSelectedTraceStepId(step.id)}
+                                                                    className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] transition-colors ${selectedTraceStep?.id === step.id
+                                                                        ? 'border-cyan-400/25 bg-cyan-500/10 text-cyan-100'
+                                                                        : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/20 hover:text-white'}`}
+                                                                >
+                                                                    {step.lane ? `${step.lane} 路 ` : ''}{step.stage}
+                                                                    {step.provider ? ` 路 ${step.provider}` : ''}
+                                                                </button>
+                                                            )) : (
+                                                                <div className="text-xs text-slate-500">暂时还没有采集到传输步骤。</div>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="flex items-center gap-2 border-b border-white/[0.08] px-4 py-2">
+                                                            {(['request', 'response', 'resolved_input'] as TraceDetailTab[]).map((tab) => (
+                                                                <button
+                                                                    key={tab}
+                                                                    type="button"
+                                                                    onClick={() => setTraceDetailTab(tab)}
+                                                                    className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] transition-colors ${traceDetailTab === tab
+                                                                        ? 'bg-white/10 text-white'
+                                                                        : 'text-slate-500 hover:text-slate-300'}`}
+                                                                >
+                                                                    {tab === 'resolved_input' ? '解析后输入' : tab === 'request' ? '请求' : '响应'}
+                                                                </button>
+                                                            ))}
+                                                            {selectedTraceStep && (
+                                                                <div className="ml-auto flex items-center gap-3 text-[11px] text-slate-500">
+                                                                    <span>{selectedTraceStep.method || '--'}</span>
+                                                                    <span>{formatTraceDuration(selectedTraceStep.durationMs)}</span>
+                                                                    {selectedTraceStep.responseStatus && <span>HTTP {selectedTraceStep.responseStatus}</span>}
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {traceError && (
+                                                            <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+                                                                {traceError}
+                                                            </div>
+                                                        )}
+
+                                                        <div className="min-h-0 flex-1 overflow-auto px-4 py-3 font-mono text-[11px] leading-5 text-slate-300" style={{ scrollbarWidth: 'thin' }}>
+                                                            {renderTraceValue(resolveTracePaneValue(traceDetailTab))}
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <div className="flex h-full items-center justify-center px-6 text-sm text-slate-500">
+                                                        请选择一条调用链记录，以查看它的请求、响应和解析后的输入。
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            )}
+
+                            <div className="flex flex-nowrap items-center justify-center gap-1.5 overflow-x-hidden px-4 pb-3 pt-3">
+                                <div className="mr-2 rounded-full border border-white/10 bg-black/25 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                    追问目标：{activeLaneLabel}
+                                </div>
+                                {isTranscriptFlushInFlight && (
+                                    <div className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-500/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                                        正在保存转写
+                                    </div>
+                                )}
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <button onClick={handleWhatToSay} className="interaction-base interaction-press whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                        <Pencil className="mr-1.5 inline h-3 w-3 opacity-70" /> 怎么回答
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenPromptLabWindow('what_to_answer')}
+                                        className="interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-all duration-200 hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                                        title="打开“怎么回答”提示词实验室"
+                                    >
+                                        {`{}`}
+                                    </button>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <button onClick={() => handleFollowUp('shorten')} className="interaction-base interaction-press whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                        <MessageSquare className="mr-1.5 inline h-3 w-3 opacity-70" /> 精简
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenPromptLabWindow('follow_up_refine')}
+                                        className="interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-all duration-200 hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                                        title="打开“精简”提示词实验室"
+                                    >
+                                        {`{}`}
+                                    </button>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <button onClick={handleRecap} className="interaction-base interaction-press whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                        <RefreshCw className="mr-1.5 inline h-3 w-3 opacity-70" /> 总结
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenPromptLabWindow('recap')}
+                                        className="interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-all duration-200 hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                                        title="打开“总结”提示词实验室"
+                                    >
+                                        {`{}`}
+                                    </button>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <button onClick={handleFollowUpQuestions} className="interaction-base interaction-press whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95">
+                                        <HelpCircle className="mr-1.5 inline h-3 w-3 opacity-70" /> 追问
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenPromptLabWindow('follow_up_questions')}
+                                        className="interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-all duration-200 hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                                        title="打开“追问”提示词实验室"
+                                    >
+                                        {`{}`}
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={handleOpenRawTranscriptWindow}
+                                    className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95"
+                                >
+                                    <Mic className="mr-1.5 inline h-3 w-3 opacity-70" /> 原始转写
                                 </button>
                                 <button
-                                    onClick={handleAnswerNow}
-                                    className={`interaction-base interaction-press min-w-[88px] shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 active:scale-95 ${isManualRecording
-                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'
-                                        : 'bg-white/5 text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-400'
-                                        }`}
+                                    onClick={handleOpenTraceWindow}
+                                    className="interaction-base interaction-press shrink-0 whitespace-nowrap rounded-full border border-white/0 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition-all duration-200 hover:border-white/5 hover:bg-white/10 hover:text-slate-200 active:scale-95"
                                 >
-                                    {isManualRecording ? (
-                                        <>
-                                            <div className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />
-                                            Stop
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Zap className="mr-1.5 inline h-3 w-3 opacity-70" />
-                                            Answer
-                                        </>
-                                    )}
+                                    <Code className="mr-1.5 inline h-3 w-3 opacity-70" /> 调用链
+                                    <span className="ml-1 rounded-full border border-white/10 bg-black/25 px-1.5 py-0.5 text-[10px] tracking-[0.12em] text-slate-300">
+                                        {traceActions.length}
+                                    </span>
                                 </button>
+                                <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                        onClick={handleAnswerNow}
+                                        className={`interaction-base interaction-press min-w-[88px] whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 active:scale-95 ${isManualRecording
+                                            ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'
+                                            : 'bg-white/5 text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-400'
+                                            }`}
+                                    >
+                                        {isManualRecording ? (
+                                            <>
+                                                <div className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />
+                                                停止
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Zap className="mr-1.5 inline h-3 w-3 opacity-70" />
+                                                作答
+                                            </>
+                                        )}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenPromptLabWindow('answer')}
+                                        className="interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-all duration-200 hover:border-white/20 hover:bg-white/10 hover:text-white active:scale-95"
+                                        title="打开“作答”提示词实验室"
+                                    >
+                                        {`{}`}
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="p-3 pt-0">
@@ -2466,7 +4696,7 @@ Provide only the answer, nothing else.`;
                                     <div className="no-drag mb-2 rounded-lg border border-white/10 bg-white/5 p-2 transition-all duration-200">
                                         <div className="mb-1.5 flex items-center justify-between">
                                             <span className="text-[11px] font-medium text-white">
-                                                Attached screenshots: {attachedContext.length}
+                                                已附加截图：{attachedContext.length}
                                             </span>
                                             <button
                                                 onClick={() => setAttachedContext([])}
@@ -2486,14 +4716,14 @@ Provide only the answer, nothing else.`;
                                                     <button
                                                         onClick={() => setAttachedContext(prev => prev.filter((_, i) => i !== idx))}
                                                         className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500/80 opacity-0 transition-opacity hover:bg-red-500 group-hover/thumb:opacity-100"
-                                                        title="Remove"
+                                                        title="移除"
                                                     >
                                                         <X className="h-2.5 w-2.5 text-white" />
                                                     </button>
                                                 </div>
                                             ))}
                                         </div>
-                                        <span className="text-[10px] text-slate-400">Ask a question or click Answer to include the screenshot context.</span>
+                                        <span className="text-[10px] text-slate-400">你可以直接提问，或者点击“作答”把这些截图一起作为上下文。</span>
                                     </div>
                                 )}
 
@@ -2504,13 +4734,13 @@ Provide only the answer, nothing else.`;
                                         value={inputValue}
                                         onChange={(e) => setInputValue(e.target.value)}
                                         onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
-                                        placeholder="Ask about the screen or current conversation..."
+                                        placeholder="输入你想问的问题，或基于当前屏幕和对话继续追问..."
                                         className="w-full rounded-xl border border-white/5 bg-[#1E1E1E] py-2.5 pl-3 pr-10 text-[13px] leading-relaxed text-slate-200 transition-all duration-200 ease-sculpted placeholder:text-slate-500 hover:bg-[#252525] focus:border-white/10 focus:bg-[#1E1E1E] focus:outline-none focus:ring-1 focus:ring-white/10"
                                     />
 
                                     {!inputValue && (
                                         <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 opacity-20">
-                                            <span className="text-[10px]">→</span>
+                                            <span className="text-[10px]">↵</span>
                                         </div>
                                     )}
                                 </div>
@@ -2548,6 +4778,22 @@ Provide only the answer, nothing else.`;
 
                                         <div className="mx-1 h-3 w-px bg-white/10" />
 
+                                        <button
+                                            type="button"
+                                            onClick={() => void window.electronAPI?.openSttCompareWindow?.()}
+                                            className={`interaction-base interaction-press flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${sttCompareResults?.active
+                                                ? 'border-cyan-400/30 bg-cyan-500/10 text-cyan-100'
+                                                : 'border-white/10 bg-black/20 text-slate-400 hover:border-white/20 hover:bg-white/5 hover:text-slate-200'
+                                                }`}
+                                            title="打开 Fun-ASR 独立对比窗口"
+                                        >
+                                            <Mic className="h-3.5 w-3.5" />
+                                            <span>Fun-ASR 对比</span>
+                                            {showFunAsrCompareBadge && (
+                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                            )}
+                                        </button>
+
                                         <div className="relative">
                                             <button
                                                 onClick={(e) => {
@@ -2567,7 +4813,7 @@ Provide only the answer, nothing else.`;
                                                     window.electronAPI.toggleSettingsWindow({ x, y });
                                                 }}
                                                 className={`interaction-base interaction-press flex h-7 w-7 items-center justify-center rounded-lg ${isSettingsOpen ? 'bg-white/10 text-white' : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'}`}
-                                                title="Settings"
+                                                title="设置"
                                             >
                                                 <SlidersHorizontal className="h-3.5 w-3.5" />
                                             </button>
@@ -2587,362 +4833,34 @@ Provide only the answer, nothing else.`;
                                 </div>
                             </div>
 
-                            <div
-                                onPointerDown={handleResizeStart('top-left')}
-                                className="no-drag absolute left-1 top-1 h-5 w-5 cursor-nwse-resize rounded-full"
-                            />
-                            <div
-                                onPointerDown={handleResizeStart('top-right')}
-                                className="no-drag absolute right-1 top-1 h-5 w-5 cursor-nesw-resize rounded-full"
-                            />
-                            <div
-                                onPointerDown={handleResizeStart('bottom-left')}
-                                className="no-drag absolute bottom-1 left-1 h-5 w-5 cursor-nesw-resize rounded-full"
-                            />
-                            <div
-                                onPointerDown={handleResizeStart('bottom-right')}
-                                className="no-drag absolute bottom-1 right-1 h-5 w-5 cursor-nwse-resize rounded-full"
-                            />
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-
-    return (
-        <div ref={contentRef} className="flex flex-col items-center w-fit mx-auto h-fit min-h-0 bg-transparent p-0 rounded-[24px] font-sans text-slate-200 gap-2">
-
-            <AnimatePresence>
-                {isExpanded && (
-                    <motion.div
-                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                        transition={{ duration: 0.3, ease: "easeInOut" }}
-                        className="flex flex-col items-center gap-2 w-full"
-                    >
-                        <TopPill
-                            expanded={isExpanded}
-                            onToggle={() => setIsExpanded(!isExpanded)}
-                            onQuit={() => onEndMeeting ? onEndMeeting() : window.electronAPI.quitApp()}
-                        />
-                        <div className="
-                    relative w-[600px] max-w-full
-                    bg-[#1E1E1E]/95
-                    backdrop-blur-2xl
-                    border border-white/10
-                    shadow-2xl shadow-black/40
-                    rounded-[24px] 
-                    overflow-hidden 
-                    flex flex-col
-                    draggable-area
-                ">
-
-
-
-
-                            {/* Rolling Transcript Bar - Single-line interviewer speech */}
-                            {(rollingTranscript || isInterviewerSpeaking) && showTranscript && (
-                                <RollingTranscript
-                                    text={rollingTranscript}
-                                    isActive={isInterviewerSpeaking}
-                                />
-                            )}
-
-                            {/* Chat History - Only show if there are messages OR active states */}
-                            {(messages.length > 0 || isManualRecording || isProcessing) && (
-                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[clamp(300px,35vh,450px)] no-drag" style={{ scrollbarWidth: 'none' }}>
-                                    {messages.map((msg) => (
-                                        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
-                                            <div className={`
-                      ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[14px] leading-relaxed relative group whitespace-pre-wrap
-                      ${msg.role === 'user'
-                                                    ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
-                                                    : ''
-                                                }
-                      ${msg.role === 'system'
-                                                    ? 'text-slate-200 font-normal'
-                                                    : ''
-                                                }
-                      ${msg.role === 'interviewer'
-                                                    ? 'text-white/40 italic pl-0 text-[13px]'
-                                                    : ''
-                                                }
-                    `}>
-                                                {msg.role === 'interviewer' && (
-                                                    <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
-                                                        面试官
-                                                        {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
-                                                    </div>
-                                                )}
-                                                {msg.role === 'user' && msg.hasScreenshot && (
-                                                    <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
-                                                        <Image className="w-2.5 h-2.5" />
-                                                        <span>已附加截图</span>
-                                                    </div>
-                                                )}
-                                                {msg.role === 'system' && !msg.isStreaming && (
-                                                    <button
-                                                        onClick={() => handleCopy(msg.text)}
-                                                        className="absolute top-2 right-2 p-1.5 bg-black/40 hover:bg-black/60 text-slate-400 hover:text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                                                    >
-                                                        <Copy className="w-3.5 h-3.5" />
-                                                    </button>
-                                                )}
-                                                {renderMessageText(msg)}
-                                            </div>
-                                        </div>
-                                    ))}
-
-                                    {/* Active Recording State with Live Transcription */}
-                                    {isManualRecording && (
-                                        <div className="flex flex-col items-end gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                            {/* Live transcription preview */}
-                                            {(manualTranscript || voiceInput) && (
-                                                <div className="max-w-[85%] px-3.5 py-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-[18px] rounded-tr-[4px]">
-                                                    <span className="text-[13px] text-emerald-300">
-                                                        {voiceInput}{voiceInput && manualTranscript ? ' ' : ''}{manualTranscript}
-                                                    </span>
-                                                </div>
-                                            )}
-                                            <div className="px-3 py-2 flex gap-1.5 items-center">
-                                                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                                                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                                                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                                                <span className="text-[10px] text-emerald-400/70 ml-1">正在聆听...</span>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {isProcessing && (
-                                        <div className="flex justify-start">
-                                            <div className="px-3 py-2 flex gap-1.5">
-                                                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                                                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                                                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                                            </div>
-                                        </div>
-                                    )}
-                                    <div ref={messagesEndRef} />
-                                </div>
-                            )}
-
-                            {/* Quick Actions - Minimal & Clean */}
-                            <div className={`flex flex-nowrap justify-center items-center gap-1.5 px-4 pb-3 overflow-x-hidden ${rollingTranscript && showTranscript ? 'pt-1' : 'pt-3'}`}>
-                                <button onClick={handleWhatToSay} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <Pencil className="w-3 h-3 opacity-70" /> 怎么回答？
-                                </button>
-                                <button onClick={() => handleFollowUp('shorten')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <MessageSquare className="w-3 h-3 opacity-70" /> 精简一下
-                                </button>
-                                <button onClick={handleRecap} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <RefreshCw className="w-3 h-3 opacity-70" /> 总结一下
-                                </button>
-                                <button onClick={handleFollowUpQuestions} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-400 bg-white/5 border border-white/0 hover:text-slate-200 hover:bg-white/10 hover:border-white/5 transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0">
-                                    <HelpCircle className="w-3 h-3 opacity-70" /> 继续追问
-                                </button>
-                                <button
-                                    onClick={handleAnswerNow}
-                                    className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium transition-all active:scale-95 duration-200 interaction-base interaction-press min-w-[74px] whitespace-nowrap shrink-0 ${isManualRecording
-                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'
-                                        : 'bg-white/5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10'
-                                        }`}
-                                >
-                                    {isManualRecording ? (
-                                        <>
-                                            <div className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                                            停止
-                                        </>
-                                    ) : (
-                                        <><Zap className="w-3 h-3 opacity-70" /> 回答</>
-                                    )}
-                                </button>
-                            </div>
-
-                            {/* Input Area */}
-                            <div className="p-3 pt-0">
-                                {/* Latent Context Preview (Attached Screenshot) */}
-                                {attachedContext.length > 0 && (
-                                    <div className="mb-2 bg-white/5 border border-white/10 rounded-lg p-2 transition-all duration-200">
-                                        <div className="flex items-center justify-between mb-1.5">
-                                            <span className="text-[11px] font-medium text-white">
-                                                已附加 {attachedContext.length} 张截图
-                                            </span>
-                                            <button
-                                                onClick={() => setAttachedContext([])}
-                                                className="p-1 hover:bg-white/10 rounded-full text-slate-400 hover:text-white transition-colors"
-                                            >
-                                                <X className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-                                        <div className="flex gap-1.5 overflow-x-auto max-w-full pb-1">
-                                            {attachedContext.map((ctx, idx) => (
-                                                <div key={ctx.path} className="relative group/thumb flex-shrink-0">
-                                                    <img
-                                                        src={ctx.preview}
-                                                        alt={`Screenshot ${idx + 1}`}
-                                                        className="h-10 w-auto rounded border border-white/20"
-                                                    />
-                                                    <button
-                                                        onClick={() => setAttachedContext(prev => prev.filter((_, i) => i !== idx))}
-                                                        className="absolute -top-1 -right-1 w-4 h-4 bg-red-500/80 hover:bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity"
-                                                        title="移除"
-                                                    >
-                                                        <X className="w-2.5 h-2.5 text-white" />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <span className="text-[10px] text-slate-400">输入问题，或直接点击“回答”</span>
-                                    </div>
-                                )}
-
-                                <div className="relative group">
-                                    <input
-                                        ref={textInputRef}
-                                        type="text"
-                                        value={inputValue}
-                                        onChange={(e) => setInputValue(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
-
-                                        className="
-                                    w-full 
-                                    bg-[#1E1E1E] 
-                                    hover:bg-[#252525] 
-                                    focus:bg-[#1E1E1E]
-                                    border border-white/5 
-                                    focus:border-white/10
-                                    focus:ring-1 focus:ring-white/10
-                                    rounded-xl 
-                                    pl-3 pr-10 py-2.5 
-                                    text-slate-200 
-                                    focus:outline-none 
-                                    transition-all duration-200 ease-sculpted
-                                    text-[13px] leading-relaxed
-                                    placeholder:text-slate-500
-                                "
+                            {!isOverlayMaximized && (
+                                <>
+                                    <div onPointerDown={handleResizeStart('top')} className="no-drag absolute left-8 right-8 top-0 z-[70] h-5 cursor-ns-resize" />
+                                    <div onPointerDown={handleResizeStart('bottom')} className="no-drag absolute bottom-0 left-8 right-8 z-[70] h-5 cursor-ns-resize" />
+                                    <div onPointerDown={handleResizeStart('left')} className="no-drag absolute bottom-8 left-0 top-8 z-[70] w-5 cursor-ew-resize" />
+                                    <div onPointerDown={handleResizeStart('right')} className="no-drag absolute bottom-8 right-0 top-8 z-[70] w-5 cursor-ew-resize" />
+                                    <div
+                                        onPointerDown={handleResizeStart('top-left')}
+                                        className="no-drag absolute left-0 top-0 z-[80] h-6 w-6 cursor-nwse-resize"
                                     />
-
-                                    {/* Custom Rich Placeholder */}
-                                    {!inputValue && (
-                                        <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] text-slate-400">
-                                            <span>可以问屏幕内容或当前对话里的任何问题，或者</span>
-                                            <div className="flex items-center gap-1 opacity-80">
-                                                {(shortcuts.selectiveScreenshot || ['⌘', 'Shift', 'H']).map((key, i) => (
-                                                    <React.Fragment key={i}>
-                                                        {i > 0 && <span className="text-[10px]">+</span>}
-                                                        <kbd className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] font-sans min-w-[20px] text-center">{key}</kbd>
-                                                    </React.Fragment>
-                                                ))}
-                                            </div>
-                                            <span>进行区域截图</span>
-                                        </div>
-                                    )}
-
-                                    {!inputValue && (
-                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none opacity-20">
-                                            <span className="text-[10px]">↵</span>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Bottom Row */}
-                                <div className="flex items-center justify-between mt-3 px-0.5">
-                                    <div className="flex items-center gap-1.5">
-                                        <button
-                                            onClick={(e) => {
-                                                // Calculate position for detached window
-                                                if (!contentRef.current) return;
-                                                const contentRect = contentRef.current.getBoundingClientRect();
-                                                const buttonRect = e.currentTarget.getBoundingClientRect();
-                                                const GAP = 8;
-
-                                                const x = window.screenX + buttonRect.left;
-                                                const y = window.screenY + contentRect.bottom + GAP;
-
-                                                window.electronAPI.toggleModelSelector({ x, y });
-                                            }}
-                                            className={`
-                                                flex items-center gap-2 px-3 py-1.5 
-                                                border border-white/10 rounded-lg transition-colors 
-                                                text-xs font-medium w-[140px]
-                                                interaction-base interaction-press
-                                                bg-black/20 text-white/70 hover:bg-white/5 hover:text-white
-                                            `}
-                                        >
-                                            <span className="truncate min-w-0 flex-1">
-                                                {(() => {
-                                                    const m = currentModel;
-                                                    if (m.startsWith('ollama-')) return m.replace('ollama-', '');
-                                                    if (m === 'gemini-3.1-flash-lite-preview') return 'Gemini 3.1 Flash';
-                                                    if (m === 'gemini-3.1-pro-preview') return 'Gemini 3.1 Pro';
-                                                    if (m === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
-                                                    if (m === 'gpt-5.4') return 'GPT 5.4';
-                                                    if (m === 'claude-sonnet-4-6') return 'Sonnet 4.6';
-                                                    return m;
-                                                })()}
-                                            </span>
-                                            <ChevronDown size={14} className="shrink-0 transition-transform" />
-                                        </button>
-
-                                        <div className="w-px h-3 bg-white/10 mx-1" />
-
-                                        {/* Settings Gear */}
-                                        <div className="relative">
-                                            <button
-                                                onClick={(e) => {
-                                                    if (isSettingsOpen) {
-                                                        // If open, just close it (toggle will handle logic but we can be explicit or just toggle)
-                                                        // Actually toggle-settings-window handles hiding if visible, so logic is same.
-                                                        window.electronAPI.toggleSettingsWindow();
-                                                        return;
-                                                    }
-
-                                                    if (!contentRef.current) return;
-
-                                                    const contentRect = contentRef.current.getBoundingClientRect();
-                                                    const buttonRect = e.currentTarget.getBoundingClientRect();
-                                                    const POPUP_WIDTH = 270; // Matches SettingsWindowHelper actual width
-                                                    const GAP = 8; // Same gap as between TopPill and main body (gap-2 = 8px)
-
-                                                    // X: Left-aligned relative to the Settings Button
-                                                    const x = window.screenX + buttonRect.left;
-
-                                                    // Y: Below the main content + gap
-                                                    const y = window.screenY + contentRect.bottom + GAP;
-
-                                                    window.electronAPI.toggleSettingsWindow({ x, y });
-                                                }}
-                                                className={`
-                                            w-7 h-7 flex items-center justify-center rounded-lg 
-                                            interaction-base interaction-press
-                                            ${isSettingsOpen ? 'text-white bg-white/10' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}
-                                        `}
-                                                title="设置"
-                                            >
-                                                <SlidersHorizontal className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
-
-                                    </div>
-
-                                    <button
-                                        onClick={handleManualSubmit}
-                                        disabled={!inputValue.trim()}
-                                        className={`
-                                    w-7 h-7 rounded-full flex items-center justify-center 
-                                    interaction-base interaction-press
-                                    ${inputValue.trim()
-                                                ? 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
-                                                : 'bg-white/5 text-white/10 cursor-not-allowed'
-                                            }
-                                `}
-                                    >
-                                        <ArrowRight className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                            </div>
+                                    <div
+                                        onPointerDown={handleResizeStart('top-right')}
+                                        className="no-drag absolute right-0 top-0 z-[80] h-6 w-6 cursor-nesw-resize"
+                                    />
+                                    <div
+                                        onPointerDown={handleResizeStart('bottom-left')}
+                                        className="no-drag absolute bottom-0 left-0 z-[80] h-6 w-6 cursor-nesw-resize"
+                                    />
+                                    <div
+                                        onPointerDown={handleResizeStart('bottom-right')}
+                                        className="no-drag absolute bottom-0 right-0 z-[80] h-6 w-6 cursor-nwse-resize"
+                                    />
+                                    <div className="pointer-events-none absolute left-2 top-2 h-3 w-3 border-l border-t border-white/10" />
+                                    <div className="pointer-events-none absolute right-2 top-2 h-3 w-3 border-r border-t border-white/10" />
+                                    <div className="pointer-events-none absolute bottom-2 left-2 h-3 w-3 border-b border-l border-white/10" />
+                                    <div className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 border-b border-r border-white/10" />
+                                </>
+                            )}
                         </div>
                     </motion.div>
                 )}
@@ -2952,3 +4870,4 @@ Provide only the answer, nothing else.`;
 };
 
 export default NativelyInterface;
+

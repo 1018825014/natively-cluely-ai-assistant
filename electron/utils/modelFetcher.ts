@@ -4,13 +4,17 @@
  */
 
 import axios from 'axios';
+import {
+    normalizeOpenAICompatibleBaseUrl,
+    OpenAICompatibleProviderConfig,
+} from '../services/LlmProviderProfiles';
 
 export interface ProviderModel {
     id: string;
     label: string;
 }
 
-type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+type Provider = 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba';
 
 /**
  * Fetch available models from a provider's API.
@@ -18,17 +22,19 @@ type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
  */
 export async function fetchProviderModels(
     provider: Provider,
-    apiKey: string
+    config: OpenAICompatibleProviderConfig
 ): Promise<ProviderModel[]> {
     switch (provider) {
         case 'openai':
-            return fetchOpenAIModels(apiKey);
+            return fetchOpenAICompatibleModels('openai', config);
+        case 'alibaba':
+            return fetchOpenAICompatibleModels('alibaba', config);
         case 'groq':
-            return fetchGroqModels(apiKey);
+            return fetchGroqModels(config.apiKey || '');
         case 'claude':
-            return fetchAnthropicModels(apiKey);
+            return fetchAnthropicModels(config.apiKey || '');
         case 'gemini':
-            return fetchGeminiModels(apiKey);
+            return fetchGeminiModels(config.apiKey || '');
         default:
             throw new Error(`Unknown provider: ${provider}`);
     }
@@ -36,24 +42,24 @@ export async function fetchProviderModels(
 
 // ─── OpenAI ──────────────────────────────────────────────────────────────────
 
-async function fetchOpenAIModels(apiKey: string): Promise<ProviderModel[]> {
-    const response = await axios.get('https://api.openai.com/v1/models', {
+async function fetchOpenAICompatibleModels(provider: 'openai' | 'alibaba', config: OpenAICompatibleProviderConfig): Promise<ProviderModel[]> {
+    const apiKey = config.apiKey || '';
+    const baseUrl = normalizeOpenAICompatibleBaseUrl(provider, config.baseUrl);
+    const response = await axios.get(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         timeout: 15000,
     });
 
     const models: any[] = response.data?.data || [];
 
-    // Only include: gpt-4o series, gpt-5.x+, o1, o3, o4 series
     const filtered = models.filter((m: any) => {
         const id = (m.id || '').toLowerCase();
-        // Include gpt-4o variants
-        if (id.includes('gpt-4o')) return true;
-        // Include gpt-5 and above
-        if (/gpt-[5-9]/.test(id)) return true;
-        // Include o1/o3/o4 reasoning models (but not audio/realtime variants)
-        if (/^o[134]/.test(id) && !id.includes('audio') && !id.includes('realtime')) return true;
-        return false;
+        if (provider === 'openai') {
+            if (id.includes('audio') || id.includes('realtime') || id.includes('embedding')) return false;
+            return id.includes('gpt-4o') || /gpt-[5-9]/.test(id) || /^o[134]/.test(id);
+        }
+        if (!id.includes('qwen')) return false;
+        return !id.includes('embedding') && !id.includes('audio') && !id.includes('tts');
     });
 
     return filtered

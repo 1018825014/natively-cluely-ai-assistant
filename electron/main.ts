@@ -2,71 +2,36 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from "ele
 import path from "path"
 import fs from "fs"
 import { autoUpdater } from "electron-updater"
+import { runtimeLogger } from "./services/RuntimeLogger"
+import { llmTraceRecorder } from "./services/LlmTraceRecorder"
 if (!app.isPackaged) {
   require('dotenv').config();
 }
 
-// Handle stdout/stderr errors at the process level to prevent EIO crashes
-// This is critical for Electron apps that may have their terminal detached
-process.stdout?.on?.('error', () => { });
-process.stderr?.on?.('error', () => { });
+const forcedUserDataName = process.env.NATIVELY_USER_DATA_NAME?.trim();
+if (!app.isPackaged) {
+  const currentUserDataPath = app.getPath("userData");
+  const desiredUserDataPath = forcedUserDataName
+    ? path.join(app.getPath("appData"), forcedUserDataName)
+    : path.join(app.getPath("appData"), "natively");
 
-process.on('uncaughtException', (err) => {
-  logToFile('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  logToFile('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
-});
-
-const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
-
-const originalLog = console.log;
-const originalWarn = console.warn;
-const originalError = console.error;
-
-const isDev = process.env.NODE_ENV === "development";
-
-function logToFile(msg: string) {
-  // Only log to file in development
-  if (!isDev) return;
-
-  try {
-    require('fs').appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
-  } catch (e) {
-    // Ignore logging errors
+  if (currentUserDataPath !== desiredUserDataPath) {
+    app.setPath("userData", desiredUserDataPath);
+    console.log(`[Main] Redirected dev userData: ${currentUserDataPath} -> ${desiredUserDataPath}`);
   }
 }
 
-console.log = (...args: any[]) => {
-  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-  logToFile('[LOG] ' + msg);
-  try {
-    originalLog.apply(console, args);
-  } catch { }
-};
-
-console.warn = (...args: any[]) => {
-  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-  logToFile('[WARN] ' + msg);
-  try {
-    originalWarn.apply(console, args);
-  } catch { }
-};
-
-console.error = (...args: any[]) => {
-  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-  logToFile('[ERROR] ' + msg);
-  try {
-    originalError.apply(console, args);
-  } catch { }
-};
+runtimeLogger.installProcessHandlers();
 
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "./ModelSelectorWindowHelper"
 import { CropperWindowHelper } from "./CropperWindowHelper"
+import { TraceWindowHelper } from "./TraceWindowHelper"
+import { RawTranscriptWindowHelper } from "./RawTranscriptWindowHelper"
+import { SttCompareWindowHelper } from "./SttCompareWindowHelper"
+import { PromptLabWindowHelper } from "./PromptLabWindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { KeybindManager } from "./services/KeybindManager"
 import { ProcessingHelper } from "./ProcessingHelper"
@@ -81,6 +46,7 @@ import { SonioxStreamingSTT } from "./audio/SonioxStreamingSTT"
 import { ElevenLabsStreamingSTT } from "./audio/ElevenLabsStreamingSTT"
 import { OpenAIStreamingSTT } from "./audio/OpenAIStreamingSTT"
 import { AlibabaParaformerSTT } from "./audio/AlibabaParaformerSTT"
+import { FunASRRealtimeSTT } from "./audio/FunASRRealtimeSTT"
 import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
@@ -90,9 +56,10 @@ import { warmupIntentClassifier } from "./llm"
 import { SttCompareRecorder, SttCompareProviderDescriptor, CompareSpeaker } from "./stt/SttCompareRecorder"
 import { buildSttBenchmarkReport } from "./stt/SttBenchmark"
 import { TechnicalGlossaryConfig } from "./stt/TechnicalGlossary"
+import { syncAlibabaHotwordConfig } from "./stt/AlibabaHotwordSync"
 
 /** Unified type for all STT providers with optional extended capabilities */
-type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | AlibabaParaformerSTT) & {
+type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | AlibabaParaformerSTT | FunASRRealtimeSTT) & {
   finalize?: () => void;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
@@ -100,6 +67,21 @@ type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreaming
 };
 
 type ConfiguredSttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba';
+type RuntimeSttProviderId = ConfiguredSttProviderId | 'funasr';
+
+type RawInterviewerTranscriptEvent = {
+  id: string;
+  text: string;
+  timestamp: number;
+  final: boolean;
+  confidence?: number;
+};
+
+type RawInterviewerTranscriptState = {
+  latest: RawInterviewerTranscriptEvent | null;
+  fullText: string;
+  events: RawInterviewerTranscriptEvent[];
+};
 
 // Premium: Knowledge modules loaded conditionally
 let KnowledgeOrchestratorClass: any = null;
@@ -115,6 +97,8 @@ import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
 import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
 import { OllamaManager } from './services/OllamaManager'
+import { PromptLabService } from "./services/PromptLabService"
+import { PromptLabActionId } from "./services/PromptOverrideManager"
 
 export class AppState {
   private static instance: AppState | null = null
@@ -123,6 +107,10 @@ export class AppState {
   public settingsWindowHelper: SettingsWindowHelper
   public modelSelectorWindowHelper: ModelSelectorWindowHelper
   public cropperWindowHelper: CropperWindowHelper
+  public traceWindowHelper: TraceWindowHelper
+  public rawTranscriptWindowHelper: RawTranscriptWindowHelper
+  public sttCompareWindowHelper: SttCompareWindowHelper
+  public promptLabWindowHelper: PromptLabWindowHelper
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
 
@@ -150,6 +138,14 @@ export class AppState {
   private isMeetingActive: boolean = false; // Guard for session state leaks
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
   private _ollamaBootstrapPromise: Promise<void> | null = null;
+  private rawInterviewerTranscriptState: RawInterviewerTranscriptState = {
+    latest: null,
+    fullText: '',
+    events: [],
+  };
+  private isRawTranscriptCaptureEnabled: boolean = false;
+  private static readonly RAW_INTERVIEWER_EVENT_LIMIT = 300;
+  private readonly promptLabService: PromptLabService = PromptLabService.getInstance();
 
 
   // Processing events
@@ -182,6 +178,10 @@ export class AppState {
     this.settingsWindowHelper = new SettingsWindowHelper()
     this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
     this.cropperWindowHelper = new CropperWindowHelper()
+    this.traceWindowHelper = new TraceWindowHelper()
+    this.rawTranscriptWindowHelper = new RawTranscriptWindowHelper()
+    this.sttCompareWindowHelper = new SttCompareWindowHelper()
+    this.promptLabWindowHelper = new PromptLabWindowHelper()
 
     // 3. Initialize other helpers
     this.screenshotHelper = new ScreenshotHelper(this.view)
@@ -191,6 +191,13 @@ export class AppState {
     this.settingsWindowHelper.setContentProtection(this.isUndetectable);
     this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
     this.cropperWindowHelper.setContentProtection(this.isUndetectable);
+    this.traceWindowHelper.setContentProtection(this.isUndetectable);
+    this.rawTranscriptWindowHelper.setContentProtection(this.isUndetectable);
+    this.sttCompareWindowHelper.setContentProtection(this.isUndetectable);
+    this.promptLabWindowHelper.setContentProtection(this.isUndetectable);
+    this.rawTranscriptWindowHelper.setOnClosed(() => {
+      this.setRawTranscriptCaptureEnabled(false);
+    });
 
     if (process.platform === 'win32') {
       this.cropperWindowHelper.preload();
@@ -281,6 +288,65 @@ export class AppState {
         win.webContents.send(channel, ...args);
       }
     });
+  }
+
+  private resetRawInterviewerTranscriptState(): void {
+    this.rawInterviewerTranscriptState = {
+      latest: null,
+      fullText: '',
+      events: [],
+    };
+    this.broadcast('raw-transcript:update', this.getRawInterviewerTranscriptState());
+  }
+
+  private setRawTranscriptCaptureEnabled(enable: boolean): void {
+    if (this.isRawTranscriptCaptureEnabled === enable) {
+      return;
+    }
+
+    this.isRawTranscriptCaptureEnabled = enable;
+    this.resetRawInterviewerTranscriptState();
+  }
+
+  private appendRawInterviewerTranscriptEvent(segment: { text: string; isFinal: boolean; confidence?: number; timestamp: number }): void {
+    if (!this.isRawTranscriptCaptureEnabled) return;
+
+    const text = segment.text.trim();
+    if (!text) return;
+
+    const event: RawInterviewerTranscriptEvent = {
+      id: `raw-interviewer-${segment.timestamp}-${Math.random().toString(36).slice(2, 10)}`,
+      text,
+      timestamp: segment.timestamp,
+      final: segment.isFinal,
+      confidence: segment.confidence,
+    };
+
+    this.rawInterviewerTranscriptState = {
+      latest: event,
+      fullText: this.rawInterviewerTranscriptState.fullText
+        ? `${this.rawInterviewerTranscriptState.fullText}\n\n${event.text}`
+        : event.text,
+      events: [...this.rawInterviewerTranscriptState.events, event].slice(-AppState.RAW_INTERVIEWER_EVENT_LIMIT),
+    };
+
+    this.broadcast('raw-transcript:update', this.getRawInterviewerTranscriptState());
+  }
+
+  public getRawInterviewerTranscriptState(): RawInterviewerTranscriptState {
+    if (!this.isRawTranscriptCaptureEnabled) {
+      return {
+        latest: null,
+        fullText: '',
+        events: [],
+      };
+    }
+
+    return {
+      latest: this.rawInterviewerTranscriptState.latest ? { ...this.rawInterviewerTranscriptState.latest } : null,
+      fullText: this.rawInterviewerTranscriptState.fullText,
+      events: this.rawInterviewerTranscriptState.events.map(event => ({ ...event })),
+    };
   }
 
   private async bootstrapOllamaEmbeddings() {
@@ -577,6 +643,10 @@ export class AppState {
     return this.resolveSttProviderId(this.getConfiguredSttProviderId());
   }
 
+  public getResolvedSttProviderId(): ConfiguredSttProviderId {
+    return this.getCurrentSttProviderId();
+  }
+
   private normalizeTranscriptForComparison(text: string): string {
     return text
       .trim()
@@ -716,6 +786,13 @@ export class AppState {
     this.pendingLiveRagTranscript[speaker] = { text: nextText, timestamp };
   }
 
+  public async resyncLiveMeetingRag(): Promise<void> {
+    if (!this.ragManager) return;
+    this.pendingLiveRagTranscript.interviewer = null;
+    this.pendingLiveRagTranscript.user = null;
+    await this.ragManager.resyncLiveTranscript('live-meeting-current', this.intelligenceManager.getTranscriptForRag(true));
+  }
+
   private resolveSttProviderId(providerId: ConfiguredSttProviderId): ConfiguredSttProviderId {
     const credentialsManager = CredentialsManager.getInstance();
 
@@ -742,7 +819,7 @@ export class AppState {
   }
 
   private instantiateSttProvider(
-    providerId: ConfiguredSttProviderId,
+    providerId: RuntimeSttProviderId,
     speaker: 'interviewer' | 'user'
   ): STTProvider {
     const credentialsManager = CredentialsManager.getInstance();
@@ -791,6 +868,15 @@ export class AppState {
         stt = new AlibabaParaformerSTT(apiKey);
       } else {
         console.warn(`[Main] No API key for Alibaba STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT();
+      }
+    } else if (providerId === 'funasr') {
+      const apiKey = credentialsManager.getAlibabaSttApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using FunASRRealtimeSTT for ${speaker}`);
+        stt = new FunASRRealtimeSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for Fun-ASR STT, falling back to GoogleSTT`);
         stt = new GoogleSTT();
       }
     } else if (providerId === 'groq' || providerId === 'azure' || providerId === 'ibmwatson') {
@@ -917,6 +1003,15 @@ export class AppState {
 
       const timestamp = Date.now();
 
+      if (speaker === 'interviewer') {
+        this.appendRawInterviewerTranscriptEvent({
+          text: segment.text,
+          isFinal: segment.isFinal,
+          confidence: segment.confidence,
+          timestamp,
+        });
+      }
+
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
         text: segment.text,
@@ -926,7 +1021,13 @@ export class AppState {
       });
 
       if (segment.isFinal) {
-        this.queueLiveRagTranscript(speaker, segment.text, timestamp);
+        if (this.intelligenceManager.hasEditedLiveTranscript()) {
+          void this.resyncLiveMeetingRag().catch((error) => {
+            console.warn('[Main] Failed to resync live RAG after transcript update:', error);
+          });
+        } else {
+          this.queueLiveRagTranscript(speaker, segment.text, timestamp);
+        }
       }
 
       this.recordSttComparisonTranscript(sttProvider, speaker, segment, timestamp);
@@ -969,6 +1070,17 @@ export class AppState {
     const timestamp = Date.now();
 
     if (speaker === 'interviewer') {
+      this.intelligenceManager.maybeCommitLiveTranscriptSegment();
+      if (this.intelligenceManager.hasEditedLiveTranscript()) {
+        void this.resyncLiveMeetingRag().catch((error) => {
+          console.warn('[Main] Failed to resync live RAG after speech end:', error);
+        });
+      }
+    } else {
+      this.intelligenceManager.commitLiveTranscriptSegment(undefined, 'user');
+    }
+
+    if (speaker === 'interviewer') {
       this.googleSTT?.notifySpeechEnded?.();
     } else {
       this.googleSTT_User?.notifySpeechEnded?.();
@@ -1002,34 +1114,55 @@ export class AppState {
     const currentProvider = this.getCurrentSttProviderId();
     const configuredProvider = this.getConfiguredSttProviderId();
     const isFallbackPrimary = currentProvider !== configuredProvider;
+    const providerLabels: Record<string, string> = {
+      openai: 'OpenAI 实时转写',
+      alibaba: '阿里云 Paraformer',
+      funasr: 'Fun-ASR 实时版',
+      google: 'Google 云 STT',
+      deepgram: 'Deepgram',
+      elevenlabs: 'ElevenLabs Scribe',
+      azure: 'Azure 语音',
+      ibmwatson: 'IBM Watson',
+      soniox: 'Soniox',
+      groq: 'Groq Whisper',
+    };
+    const formatProviderName = (providerId: string) => providerLabels[providerId] || providerId;
     const descriptors: SttCompareProviderDescriptor[] = [
       {
         id: currentProvider,
         label: isFallbackPrimary
-          ? `Current (${currentProvider}, fallback from ${configuredProvider})`
-          : `Current (${currentProvider})`,
+          ? `当前主模型（${formatProviderName(currentProvider)}，由 ${formatProviderName(configuredProvider)} 回退）`
+          : `当前主模型（${formatProviderName(currentProvider)}）`,
         kind: 'primary',
         available: true,
         reason: isFallbackPrimary
-          ? `Configured provider "${configuredProvider}" is unavailable, so the pipeline is currently using "${currentProvider}".`
+          ? `已配置的提供商“${formatProviderName(configuredProvider)}”当前不可用，所以系统正在使用“${formatProviderName(currentProvider)}”。`
           : undefined,
       },
     ];
 
     descriptors.push({
       id: 'openai',
-      label: currentProvider === 'openai' ? 'OpenAI (Current)' : 'OpenAI Realtime',
+      label: currentProvider === 'openai' ? 'OpenAI（当前主模型）' : 'OpenAI 实时转写',
       kind: currentProvider === 'openai' ? 'primary' : 'shadow',
       available: Boolean(credentialsManager.getOpenAiSttApiKey()),
-      reason: credentialsManager.getOpenAiSttApiKey() ? undefined : 'No OpenAI STT API key configured',
+      reason: credentialsManager.getOpenAiSttApiKey() ? undefined : '未配置 OpenAI STT API 密钥',
     });
 
     descriptors.push({
       id: 'alibaba',
-      label: currentProvider === 'alibaba' ? 'Alibaba (Current)' : 'Alibaba Paraformer',
+      label: currentProvider === 'alibaba' ? '阿里云 Paraformer（当前主模型）' : '阿里云 Paraformer',
       kind: currentProvider === 'alibaba' ? 'primary' : 'shadow',
       available: Boolean(credentialsManager.getAlibabaSttApiKey()),
-      reason: credentialsManager.getAlibabaSttApiKey() ? undefined : 'No Alibaba STT API key configured',
+      reason: credentialsManager.getAlibabaSttApiKey() ? undefined : '未配置阿里云 STT API 密钥',
+    });
+
+    descriptors.push({
+      id: 'funasr',
+      label: 'Fun-ASR 实时版',
+      kind: 'shadow',
+      available: Boolean(credentialsManager.getAlibabaSttApiKey()),
+      reason: credentialsManager.getAlibabaSttApiKey() ? undefined : '未配置阿里云 STT API 密钥',
     });
 
     return descriptors.filter((descriptor, index, array) =>
@@ -1038,7 +1171,7 @@ export class AppState {
   }
 
   private createCompareShadowProvider(
-    providerId: 'openai' | 'alibaba',
+    providerId: 'openai' | 'alibaba' | 'funasr',
     speaker: CompareSpeaker
   ): STTProvider | null {
     const provider = this.instantiateSttProvider(providerId, speaker);
@@ -1066,7 +1199,7 @@ export class AppState {
     }
 
     const currentProvider = this.getCurrentSttProviderId();
-    const candidates: Array<'openai' | 'alibaba'> = ['openai', 'alibaba'];
+    const candidates: Array<'openai' | 'alibaba' | 'funasr'> = ['openai', 'alibaba', 'funasr'];
 
     for (const speaker of ['interviewer', 'user'] as const) {
       for (const providerId of candidates) {
@@ -1406,6 +1539,8 @@ export class AppState {
     this.isMeetingActive = true;
     this.pendingLiveRagTranscript.interviewer = null;
     this.pendingLiveRagTranscript.user = null;
+    this.promptLabService.resetMeetingState();
+    this.resetRawInterviewerTranscriptState();
     if (metadata) {
       this.intelligenceManager.setMeetingMetadata(metadata);
     }
@@ -1457,6 +1592,7 @@ export class AppState {
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.isMeetingActive = false; // Block new data immediately
+    this.promptLabService.resetMeetingState();
 
     this.flushPendingLiveRagTranscript('interviewer');
     this.flushPendingLiveRagTranscript('user');
@@ -1561,32 +1697,46 @@ export class AppState {
       helper.getOverlayWindow()?.webContents.send('intelligence-assist-update', { insight });
     })
 
-    this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
+    this.intelligenceManager.on('suggested_answer', (payload: any) => {
       const win = mainWindow()
       if (win) {
-        win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
+        win.webContents.send('intelligence-suggested-answer', payload)
       }
 
     })
 
-    this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
+    this.intelligenceManager.on('suggested_answer_token', (payload: any) => {
       const win = mainWindow()
       if (win) {
-        win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
+        win.webContents.send('intelligence-suggested-answer-token', payload)
       }
     })
 
-    this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
+    this.intelligenceManager.on('suggested_answer_status', (payload: any) => {
       const win = mainWindow()
       if (win) {
-        win.webContents.send('intelligence-refined-answer-token', { token, intent })
+        win.webContents.send('intelligence-suggested-answer-status', payload)
       }
     })
 
-    this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
+    this.intelligenceManager.on('live_transcript_updated', (payload: any) => {
       const win = mainWindow()
       if (win) {
-        win.webContents.send('intelligence-refined-answer', { answer, intent })
+        win.webContents.send('live-transcript-update', payload)
+      }
+    })
+
+    this.intelligenceManager.on('refined_answer_token', (payload: any) => {
+      const win = mainWindow()
+      if (win) {
+        win.webContents.send('intelligence-refined-answer-token', payload)
+      }
+    })
+
+    this.intelligenceManager.on('refined_answer', (payload: any) => {
+      const win = mainWindow()
+      if (win) {
+        win.webContents.send('intelligence-refined-answer', payload)
       }
 
     })
@@ -1680,13 +1830,22 @@ export class AppState {
     this.refreshSttCompareSession();
   }
 
-  public setTechnicalGlossaryConfig(config: TechnicalGlossaryConfig): void {
-    CredentialsManager.getInstance().setTechnicalGlossaryConfig(config);
-    this.googleSTT?.setTechnicalGlossaryConfig?.(config);
-    this.googleSTT_User?.setTechnicalGlossaryConfig?.(config);
-    this.compareShadowProviders.interviewer.forEach((provider) => provider.setTechnicalGlossaryConfig?.(config));
-    this.compareShadowProviders.user.forEach((provider) => provider.setTechnicalGlossaryConfig?.(config));
+  public async setTechnicalGlossaryConfig(config: TechnicalGlossaryConfig): Promise<{ config: TechnicalGlossaryConfig; warning?: string }> {
+    const credentialsManager = CredentialsManager.getInstance();
+    const syncResult = await syncAlibabaHotwordConfig(config, credentialsManager.getAlibabaSttApiKey());
+    const nextConfig = syncResult.config;
+    const warning = syncResult.warnings.length > 0 ? syncResult.warnings.join(' ') : undefined;
+
+    credentialsManager.setTechnicalGlossaryConfig(nextConfig);
+    this.googleSTT?.setTechnicalGlossaryConfig?.(nextConfig);
+    this.googleSTT_User?.setTechnicalGlossaryConfig?.(nextConfig);
+    this.compareShadowProviders.interviewer.forEach((provider) => provider.setTechnicalGlossaryConfig?.(nextConfig));
+    this.compareShadowProviders.user.forEach((provider) => provider.setTechnicalGlossaryConfig?.(nextConfig));
     this.refreshSttCompareSession();
+    if (warning) {
+      console.warn('[AppState] Technical glossary saved with warning:', warning);
+    }
+    return { config: nextConfig, warning };
   }
 
   public async exportSttBenchmarkReport(): Promise<{ success: boolean; jsonPath?: string; markdownPath?: string; error?: string }> {
@@ -1779,6 +1938,36 @@ export class AppState {
 
   public getWindowHelper(): WindowHelper {
     return this.windowHelper
+  }
+
+  public getTraceWindowHelper(): TraceWindowHelper {
+    return this.traceWindowHelper
+  }
+
+  public getRawTranscriptWindowHelper(): RawTranscriptWindowHelper {
+    return this.rawTranscriptWindowHelper
+  }
+
+  public getSttCompareWindowHelper(): SttCompareWindowHelper {
+    return this.sttCompareWindowHelper
+  }
+
+  public getPromptLabWindowHelper(): PromptLabWindowHelper {
+    return this.promptLabWindowHelper
+  }
+
+  public getPromptLabService(): PromptLabService {
+    return this.promptLabService
+  }
+
+  public openRawTranscriptWindow(): void {
+    this.setRawTranscriptCaptureEnabled(true);
+    this.rawTranscriptWindowHelper.openWindow(this.getMainWindow());
+  }
+
+  public openPromptLabWindow(action: PromptLabActionId, context?: any): void {
+    this.promptLabService.setActionContext(action, context);
+    this.promptLabWindowHelper.openWindow(this.getMainWindow(), action);
   }
 
   public getIntelligenceManager(): IntelligenceManager {
@@ -1877,15 +2066,20 @@ export class AppState {
 
     const mode = this.windowHelper.getCurrentWindowMode();
     const isVisible = this.windowHelper.isVisible();
+    const overlayState = this.windowHelper.getOverlayWindowState();
     console.log(`[Main] toggleMainWindow mode=${mode} visible=${isVisible} meetingActive=${this.isMeetingActive}`);
 
-    // During a meeting we always want Ctrl+B / toggle actions to operate on the
-    // overlay window directly instead of depending on renderer-local expand state.
+    // During a meeting, Ctrl+B behaves as:
+    // 1. Hidden overlay -> show + bring to front
+    // 2. Visible but unfocused overlay -> bring to front
+    // 3. Visible and focused overlay -> hide
     if (this.isMeetingActive || mode === 'overlay') {
-      if (isVisible) {
-        this.windowHelper.hideMainWindow();
+      if (!overlayState.overlayVisible || !isVisible) {
+        this.windowHelper.switchToOverlay({ activateTemporarily: true });
+      } else if (!overlayState.overlayFocused) {
+        this.windowHelper.activateOverlayWindow();
       } else {
-        this.windowHelper.switchToOverlay();
+        this.windowHelper.hideMainWindow();
       }
       console.log('[Main] overlay window state after toggle:', JSON.stringify(this.windowHelper.getOverlayWindowState()));
       return;
@@ -2100,7 +2294,7 @@ export class AppState {
         }
       },
       {
-        label: `Toggle Window (${displayToggle})`,
+        label: `Show / Hide / Focus Window (${displayToggle})`,
         click: () => {
           this.toggleMainWindow()
         }
@@ -2169,6 +2363,9 @@ export class AppState {
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)
     this.cropperWindowHelper.setContentProtection(state)
+    this.traceWindowHelper.setContentProtection(state)
+    this.rawTranscriptWindowHelper.setContentProtection(state)
+    this.promptLabWindowHelper.setContentProtection(state)
 
     // Persist state via SettingsManager
     SettingsManager.getInstance().set('isUndetectable', state);
@@ -2440,6 +2637,8 @@ export class AppState {
 async function initializeApp() {
   // 2. Wait for app to be ready
   await app.whenReady()
+  runtimeLogger.start()
+  llmTraceRecorder.start()
 
   // 3. Initialize Managers
   // Initialize CredentialsManager and load keys explicitly

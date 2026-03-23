@@ -58,6 +58,8 @@ export class ProcessingHelper {
     const groqKey = credManager.getGroqApiKey();
     const openaiKey = credManager.getOpenaiApiKey();
     const claudeKey = credManager.getClaudeApiKey();
+    const openaiConfig = credManager.getOpenAICompatibleProviderConfig('openai');
+    const alibabaConfig = credManager.getOpenAICompatibleProviderConfig('alibaba');
 
     if (geminiKey) {
       console.log("[ProcessingHelper] Loading stored Gemini API Key from CredentialsManager");
@@ -69,9 +71,14 @@ export class ProcessingHelper {
       this.llmHelper.setGroqApiKey(groqKey);
     }
 
-    if (openaiKey) {
+    if (openaiKey || openaiConfig.baseUrl || openaiConfig.preferredModel) {
       console.log("[ProcessingHelper] Loading stored OpenAI API Key from CredentialsManager");
-      this.llmHelper.setOpenaiApiKey(openaiKey);
+      this.llmHelper.setOpenAICompatibleProviderConfig('openai', openaiConfig);
+    }
+
+    if (alibabaConfig.apiKey || alibabaConfig.baseUrl || alibabaConfig.preferredModel) {
+      console.log("[ProcessingHelper] Loading stored Alibaba LLM config from CredentialsManager");
+      this.llmHelper.setOpenAICompatibleProviderConfig('alibaba', alibabaConfig);
     }
 
     if (claudeKey) {

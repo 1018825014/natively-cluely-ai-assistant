@@ -51,14 +51,6 @@ const MockupNativelyInterface = ({ opacity }: { opacity: number }) => (
             {/* Main Interface Window Replica */}
             <div className="relative w-[600px] max-w-full bg-[#1E1E1E]/95 backdrop-blur-2xl border border-white/10 shadow-2xl shadow-black/40 rounded-[24px] overflow-hidden flex flex-col pt-2 pb-3">
                 
-                {/* Rolling Transcript Bar */}
-                <div className="w-full flex justify-center py-2 px-4 border-b border-white/5 bg-[#1E1E1E]/50 mb-1">
-                    <p className="text-[13px] text-white/90 truncate max-w-[90%] font-medium">
-                        <span className="text-blue-400 mr-2 font-semibold">面试官</span>
-                        <span className="opacity-80">那你会怎么优化当前这个算法？</span>
-                    </p>
-                </div>
-
                 {/* Chat History Mock */}
                 <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
                     <div className="flex justify-start">
@@ -124,7 +116,7 @@ interface CustomSelectProps {
     placeholder?: string;
 }
 
-const CustomSelect: React.FC<CustomSelectProps> = ({ label, icon, value, options, onChange, placeholder = "Select device" }) => {
+const CustomSelect: React.FC<CustomSelectProps> = ({ label, icon, value, options, onChange, placeholder = "选择设备" }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
 
@@ -259,14 +251,14 @@ const ProviderSelect: React.FC<ProviderSelectProps> = ({ value, options, onChang
                         <div className="min-w-0 flex-1 text-left">
                             <div className="flex items-center gap-2">
                                 <span className="text-[13px] font-semibold text-text-primary truncate leading-tight">{selected.label}</span>
-                                {selected.badge && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ml-2 ${getBadgeStyle(selected.badge === 'Saved' ? 'green' : selected.color)}`}>{selected.badge}</span>}
-                                {selected.recommended && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ml-2 ${getBadgeStyle(selected.color)}`}>Recommended</span>}
+                                {selected.badge && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ml-2 ${getBadgeStyle(selected.badge === '已保存' ? 'green' : selected.color)}`}>{selected.badge}</span>}
+                                {selected.recommended && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ml-2 ${getBadgeStyle(selected.color)}`}>推荐</span>}
                             </div>
                             {/* Short description for trigger */}
                             <span className="text-[11px] text-text-tertiary truncate block leading-tight mt-0.5">{selected.desc}</span>
                         </div>
                     </div>
-                ) : <span className="text-text-secondary px-2 text-sm">Select Provider</span>}
+                ) : <span className="text-text-secondary px-2 text-sm">选择提供商</span>}
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-text-tertiary transition-transform duration-300 group-hover:bg-bg-surface ${isOpen ? 'rotate-180 bg-bg-surface text-text-primary' : ''}`}>
                     <ChevronDown size={14} strokeWidth={2.5} />
                 </div>
@@ -297,8 +289,8 @@ const ProviderSelect: React.FC<ProviderSelectProps> = ({ value, options, onChang
                                             <div className="flex items-center justify-between mb-0.5">
                                                 <div className="flex items-center gap-2">
                                                     <span className={`text-[13px] font-medium transition-colors ${isSelected ? 'text-white' : 'text-text-primary'}`}>{option.label}</span>
-                                                    {option.badge && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${getBadgeStyle(option.badge === 'Saved' ? 'green' : option.color)}`}>{option.badge}</span>}
-                                                    {option.recommended && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${getBadgeStyle(option.color)}`}>Recommended</span>}
+                                                    {option.badge && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${getBadgeStyle(option.badge === '已保存' ? 'green' : option.color)}`}>{option.badge}</span>}
+                                                    {option.recommended && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide ${getBadgeStyle(option.color)}`}>推荐</span>}
                                                 </div>
                                                 {isSelected && <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}><Check size={14} className="text-accent-primary" strokeWidth={3} /></motion.div>}
                                             </div>
@@ -421,11 +413,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [isThemeDropdownOpen, isAiLangDropdownOpen]);
-
-    const [showTranscript, setShowTranscript] = useState(() => {
-        const stored = localStorage.getItem('natively_interviewer_transcript');
-        return stored !== 'false';
-    });
 
     // Recognition Language
     const [recognitionLanguage, setRecognitionLanguage] = useState('');
@@ -672,16 +659,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     };
 
 
-    // Sync transcript setting
-    useEffect(() => {
-        const handleStorage = () => {
-            const stored = localStorage.getItem('natively_interviewer_transcript');
-            setShowTranscript(stored !== 'false');
-        };
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, []);
-
     // Theme Handlers
     const handleSetTheme = async (mode: 'system' | 'light' | 'dark') => {
         setThemeMode(mode);
@@ -699,7 +676,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
 
     // STT Provider settings
-    const [sttProvider, setSttProvider] = useState<'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'>('google');
+    const [sttProvider, setSttProvider] = useState<'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'alibaba'>('alibaba');
     const [groqSttModel, setGroqSttModel] = useState('whisper-large-v3-turbo');
     const [sttGroqKey, setSttGroqKey] = useState('');
     const [sttOpenaiKey, setSttOpenaiKey] = useState('');
@@ -728,6 +705,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [alibabaVocabularyId, setAlibabaVocabularyId] = useState('');
     const [glossarySaving, setGlossarySaving] = useState(false);
     const [glossarySaved, setGlossarySaved] = useState(false);
+    const [glossarySaveMessage, setGlossarySaveMessage] = useState('');
     const [sttCompareResults, setSttCompareResults] = useState<any>(null);
     const [sttCompareBusy, setSttCompareBusy] = useState<'idle' | 'starting' | 'stopping' | 'exporting'>('idle');
     const [sttCompareExportMessage, setSttCompareExportMessage] = useState('');
@@ -754,7 +732,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 // @ts-ignore
                 const creds = await window.electronAPI?.getStoredCredentials?.();
                 if (creds) {
-                    setSttProvider(creds.sttProvider || 'google');
+                    setSttProvider(creds.sttProvider || 'alibaba');
                     if (creds.groqSttModel) setGroqSttModel(creds.groqSttModel);
                     setGoogleServiceAccountPath(creds.googleServiceAccountPath);
                     setHasStoredSttGroqKey(creds.hasSttGroqKey);
@@ -935,7 +913,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     };
 
     const handleRemoveGoogleSearchKey = async (type: 'apikey' | 'cseid') => {
-        if (!confirm(`确定要移除 Google Search 的 ${type === 'apikey' ? 'API Key' : 'CSE ID'} 吗？`)) return;
+        if (!confirm(`确定要移除 Google Search 的 ${type === 'apikey' ? 'API 密钥' : 'CSE ID'} 吗？`)) return;
 
         try {
             if (type === 'apikey') {
@@ -962,7 +940,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         const keyToTest = keyMap[sttProvider] || '';
         if (!keyToTest.trim()) {
             setSttTestStatus('error');
-            setSttTestError('Please enter an API key first');
+            setSttTestError('请先输入 API 密钥');
             return;
         }
 
@@ -980,16 +958,17 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 setTimeout(() => setSttTestStatus('idle'), 3000);
             } else {
                 setSttTestStatus('error');
-                setSttTestError(result?.error || 'Connection failed');
+                setSttTestError(result?.error || '连接失败');
             }
         } catch (e: any) {
             setSttTestStatus('error');
-            setSttTestError(e.message || 'Test failed');
+            setSttTestError(e.message || '测试失败');
         }
     };
 
     const handleSaveTechnicalGlossary = async () => {
         setGlossarySaving(true);
+        setGlossarySaveMessage('');
         try {
             const entries = technicalGlossaryText
                 .split(/\r?\n/)
@@ -1004,15 +983,27 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                     };
                 });
 
-            await window.electronAPI?.setTechnicalGlossary?.({
+            const result = await window.electronAPI?.setTechnicalGlossary?.({
                 entries,
                 alibabaWorkspaceId: alibabaWorkspaceId.trim() || undefined,
                 alibabaVocabularyId: alibabaVocabularyId.trim() || undefined,
             });
+
+            if (!result?.success) {
+                setGlossarySaveMessage(result?.error || '保存热词表失败');
+                return;
+            }
+
+            if (result.config?.alibabaVocabularyId) {
+                setAlibabaVocabularyId(result.config.alibabaVocabularyId);
+            }
+
+            setGlossarySaveMessage(result?.warning || '已保存，热词更新会从下一句开始生效。');
             setGlossarySaved(true);
             setTimeout(() => setGlossarySaved(false), 2000);
         } catch (error) {
             console.error('Failed to save technical glossary:', error);
+            setGlossarySaveMessage(error instanceof Error ? error.message : '保存热词表失败');
         } finally {
             setGlossarySaving(false);
         }
@@ -1051,13 +1042,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         try {
             const result = await window.electronAPI?.exportSttBenchmarkReport?.();
             if (result?.success) {
-                setSttCompareExportMessage(`JSON: ${result.jsonPath} | Markdown: ${result.markdownPath}`);
+                setSttCompareExportMessage(`JSON 报告：${result.jsonPath} | Markdown 报告：${result.markdownPath}`);
             } else {
-                setSttCompareExportMessage(result?.error || 'Export failed');
+                setSttCompareExportMessage(result?.error || '导出失败');
             }
         } catch (error: any) {
             console.error('Failed to export STT benchmark report:', error);
-            setSttCompareExportMessage(error?.message || 'Export failed');
+            setSttCompareExportMessage(error?.message || '导出失败');
         } finally {
             setSttCompareBusy('idle');
         }
@@ -1580,31 +1571,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
                                                 </div>
 
-                                                {/* Interviewer Transcript */}
-                                                <div className="flex items-center justify-between">
-                                                    <div className="flex items-center gap-4">
-                                                        <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
-                                                            <MessageSquare size={20} />
-                                                        </div>
-                                                        <div>
-                                                            <h3 className="text-sm font-bold text-text-primary">面试官转录</h3>
-                                                            <p className="text-xs text-text-secondary mt-0.5">显示面试官的实时转录内容</p>
-                                                        </div>
-                                                    </div>
-                                                    <div
-                                                        onClick={() => {
-                                                            const newState = !showTranscript;
-                                                            setShowTranscript(newState);
-                                                            localStorage.setItem('natively_interviewer_transcript', String(newState));
-                                                            window.dispatchEvent(new Event('storage'));
-                                                        }}
-                                                        className={`w-11 h-6 rounded-full relative transition-colors ${showTranscript ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
-                                                    >
-                                                        <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${showTranscript ? 'translate-x-5' : 'translate-x-0'}`} />
-                                                    </div>
-                                                </div>
-
-
                                                 {/* Theme */}
                                                 <div className="flex items-center justify-between">
                                                     <div className="flex items-center gap-4">
@@ -1877,7 +1843,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                         <div className="flex items-center justify-between mb-1">
                                             <div className="flex items-center gap-2">
                                             <h3 className="text-sm font-bold text-text-primary">职业画像</h3>
-                                                <span className="bg-yellow-500/10 text-yellow-500 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">BETA</span>
+                                                <span className="bg-yellow-500/10 text-yellow-500 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">测试中</span>
                                             </div>
                                             <div className="text-[11px] font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-500">
                                                 <CheckCircle size={12} />
@@ -2170,7 +2136,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
                                                     <div>
                                                         <div className="flex items-center gap-2">
-                                                            <h4 className="text-sm font-bold text-text-primary">Google Search API</h4>
+                                                            <h4 className="text-sm font-bold text-text-primary">Google 搜索 API</h4>
                                                             {hasStoredGoogleSearchKey && hasStoredGoogleSearchCseId && (
                                                                 <span className="text-[9px] font-bold text-emerald-500 px-1.5 py-0.5 bg-emerald-500/10 rounded-full border border-emerald-500/20 uppercase tracking-wide">已连接</span>
                                                             )}
@@ -2184,12 +2150,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 <div className="space-y-3">
                                                     <div>
                                                         <div className="flex justify-between items-center mb-1.5">
-                                                            <label className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide block">API Key</label>
+                                                            <label className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide block">API 密钥</label>
                                                             {hasStoredGoogleSearchKey && (
                                                                 <button
                                                                     onClick={() => handleRemoveGoogleSearchKey('apikey')}
                                                                     className="text-[10px] flex items-center gap-1 text-red-400 hover:text-red-300 transition-colors bg-red-500/10 hover:bg-red-500/20 px-1.5 py-0.5 rounded"
-                                                                    title="移除 API Key"
+                                                                    title="移除 API 密钥"
                                                                 >
                                                                     <Trash2 size={10} strokeWidth={2} /> 移除
                                                                 </button>
@@ -2199,13 +2165,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             type="password"
                                                             value={googleSearchApiKey}
                                                             onChange={(e) => setGoogleSearchApiKey(e.target.value)}
-                                                            placeholder={hasStoredGoogleSearchKey ? '••••••••••••' : '输入 Google API Key'}
+                                                            placeholder={hasStoredGoogleSearchKey ? '••••••••••••' : '输入 Google API 密钥'}
                                                             className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary/50 focus:ring-1 focus:ring-accent-primary/20 transition-all"
                                                         />
                                                     </div>
                                                     <div>
                                                         <div className="flex justify-between items-center mb-1.5">
-                                                            <label className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide block">Custom Search Engine ID</label>
+                                                            <label className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide block">自定义搜索引擎 ID</label>
                                                             {hasStoredGoogleSearchCseId && (
                                                                 <button
                                                                     onClick={() => handleRemoveGoogleSearchKey('cseid')}
@@ -2255,7 +2221,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 <div className="mt-3 flex items-start gap-2 px-3 py-2.5 bg-bg-input/50 rounded-lg">
                                                     <Info size={12} className="text-text-tertiary shrink-0 mt-0.5" />
                                                     <p className="text-[10px] text-text-tertiary leading-relaxed">
-                                                        如果这里不填，公司研究会退回使用 LLM 的通用知识，信息可能过时。你可以在 <span className="text-emerald-500/80 hover:text-emerald-400 underline underline-offset-2" onClick={() => window.electronAPI?.openExternal?.('https://console.cloud.google.com/apis/credentials')}>Google Cloud Console</span> 获取 API Key，并在 <span className="text-emerald-500/80 hover:text-emerald-400 underline underline-offset-2" onClick={() => window.electronAPI?.openExternal?.('https://cse.google.com/cse/create/new')}>cse.google.com</span> 创建 Custom Search Engine。
+                                                        如果这里不填，公司研究会退回使用 LLM 的通用知识，信息可能过时。你可以在 <span className="text-emerald-500/80 hover:text-emerald-400 underline underline-offset-2" onClick={() => window.electronAPI?.openExternal?.('https://console.cloud.google.com/apis/credentials')}>Google Cloud Console</span> 获取 API 密钥，并在 <span className="text-emerald-500/80 hover:text-emerald-400 underline underline-offset-2" onClick={() => window.electronAPI?.openExternal?.('https://cse.google.com/cse/create/new')}>cse.google.com</span> 创建自定义搜索引擎。
                                                     </p>
                                                 </div>
                                             </div>
@@ -2386,7 +2352,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-border-subtle bg-bg-subtle/30 hover:bg-bg-subtle hover:border-green-500/30 transition-all duration-200 text-xs font-medium text-text-secondary hover:text-green-500 active:scale-95 mt-1"
                                         >
                                             <RotateCcw size={13} strokeWidth={2.5} />
-                                            Restore Default
+                                            恢复默认
                                         </button>
                                     </div>
 
@@ -2398,7 +2364,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 <div className="flex items-center justify-between py-1.5 group">
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Eye size={14} /></span>
-                                                                <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">切换显示</span>
+                                                                <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">显示/隐藏/置前</span>
                                                     </div>
                                                     <KeyRecorder
                                                         currentKeys={shortcuts.toggleVisibility}
@@ -2519,15 +2485,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         value={sttProvider}
                                                         onChange={(val) => handleSttProviderChange(val as any)}
                                                         options={[
-                                                            { id: 'google', label: 'Google Cloud', badge: googleServiceAccountPath ? '已保存' : null, recommended: true, desc: '通过 Service Account 使用 gRPC 流式识别', color: 'blue', icon: <Mic size={14} /> },
+                                                            { id: 'google', label: 'Google Cloud 语音识别', badge: googleServiceAccountPath ? '已保存' : null, recommended: true, desc: '通过服务账号使用 gRPC 流式识别', color: 'blue', icon: <Mic size={14} /> },
                                                             { id: 'groq', label: 'Groq Whisper', badge: hasStoredSttGroqKey ? '已保存' : null, recommended: true, desc: '超快 REST 转录', color: 'orange', icon: <Mic size={14} /> },
                                                             { id: 'openai', label: 'OpenAI Whisper', badge: hasStoredSttOpenaiKey ? '已保存' : null, desc: '兼容 OpenAI 的 Whisper API', color: 'green', icon: <Mic size={14} /> },
                                                             { id: 'deepgram', label: 'Deepgram Nova-2', badge: hasStoredDeepgramKey ? '已保存' : null, recommended: true, desc: '高精度 REST 转录', color: 'purple', icon: <Mic size={14} /> },
                                                             { id: 'elevenlabs', label: 'ElevenLabs Scribe', badge: hasStoredElevenLabsKey ? '已保存' : null, desc: 'Scribe v2 实时 API', color: 'teal', icon: <Mic size={14} /> },
-                                                            { id: 'azure', label: 'Azure Speech', badge: hasStoredAzureKey ? '已保存' : null, desc: 'Microsoft Cognitive Services 语音转文字', color: 'cyan', icon: <Mic size={14} /> },
+                                                            { id: 'azure', label: 'Azure 语音', badge: hasStoredAzureKey ? '已保存' : null, desc: 'Microsoft Cognitive Services 语音转文字', color: 'cyan', icon: <Mic size={14} /> },
                                                             { id: 'ibmwatson', label: 'IBM Watson', badge: hasStoredIbmWatsonKey ? '已保存' : null, desc: 'IBM Watson 云端 STT 服务', color: 'indigo', icon: <Mic size={14} /> },
                                                             { id: 'soniox', label: 'Soniox', badge: hasStoredSonioxKey ? '已保存' : null, recommended: true, desc: '支持 60+ 语言、多语种与领域上下文', color: 'cyan', icon: <Mic size={14} /> },
-                                                            { id: 'alibaba', label: 'Alibaba Paraformer', badge: hasStoredAlibabaKey ? 'Saved' : null, recommended: true, desc: 'DashScope realtime Chinese ASR with hotwords', color: 'orange', icon: <Mic size={14} /> },
+                                                            { id: 'alibaba', label: '阿里云 Paraformer', badge: hasStoredAlibabaKey ? '已保存' : null, recommended: true, desc: 'DashScope 中文实时转写，支持热词', color: 'orange', icon: <Mic size={14} /> },
                                                         ]}
                                                     />
                                                 </div>
@@ -2570,7 +2536,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             {/* Google Cloud Service Account */}
                                             {sttProvider === 'google' && (
                                                 <div className="bg-bg-card rounded-xl border border-border-subtle p-4">
-                                                    <label className="text-xs font-medium text-text-secondary mb-2 block">Service Account JSON</label>
+                                                    <label className="text-xs font-medium text-text-secondary mb-2 block">服务账号 JSON</label>
                                                     <div className="flex gap-2">
                                                         <div className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-xs text-text-secondary font-mono truncate">
                                                             {googleServiceAccountPath
@@ -2591,7 +2557,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         </button>
                                                     </div>
                                                     <p className="text-[10px] text-text-tertiary mt-2">
-                                                        Google Cloud Speech-to-Text 必需。
+                                                        使用 Google Cloud 实时识别时必填。
                                                     </p>
                                                 </div>
                                             )}
@@ -2600,7 +2566,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             {sttProvider !== 'google' && (
                                                 <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
                                                     <label className="text-xs font-medium text-text-secondary block">
-                                                        {sttProvider === 'groq' ? 'Groq' : sttProvider === 'openai' ? 'OpenAI STT' : sttProvider === 'elevenlabs' ? 'ElevenLabs' : sttProvider === 'azure' ? 'Azure' : sttProvider === 'ibmwatson' ? 'IBM Watson' : sttProvider === 'soniox' ? 'Soniox' : sttProvider === 'alibaba' ? 'Alibaba Paraformer' : 'Deepgram'} API Key
+                                                        {sttProvider === 'groq' ? 'Groq' : sttProvider === 'openai' ? 'OpenAI STT' : sttProvider === 'elevenlabs' ? 'ElevenLabs' : sttProvider === 'azure' ? 'Azure' : sttProvider === 'ibmwatson' ? 'IBM Watson' : sttProvider === 'soniox' ? 'Soniox' : sttProvider === 'alibaba' ? '阿里云 Paraformer' : 'Deepgram'} API 密钥
                                                     </label>
                                                     {sttProvider === 'openai' && (
                                                         <p className="text-[10px] text-text-tertiary mb-1.5">
@@ -2632,18 +2598,18 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             }}
                                                             placeholder={
                                                                 sttProvider === 'groq'
-                                                                    ? (hasStoredSttGroqKey ? '••••••••••••' : '输入 Groq API Key')
+                                                                    ? (hasStoredSttGroqKey ? '••••••••••••' : '输入 Groq API 密钥')
                                                                     : sttProvider === 'openai'
-                                                                        ? (hasStoredSttOpenaiKey ? '••••••••••••' : '输入 OpenAI STT API Key')
+                                                                        ? (hasStoredSttOpenaiKey ? '••••••••••••' : '输入 OpenAI STT API 密钥')
                                                                         : sttProvider === 'elevenlabs'
-                                                                            ? (hasStoredElevenLabsKey ? '••••••••••••' : '输入 ElevenLabs API Key')
+                                                                            ? (hasStoredElevenLabsKey ? '••••••••••••' : '输入 ElevenLabs API 密钥')
                                                                             : sttProvider === 'azure'
-                                                                                ? (hasStoredAzureKey ? '••••••••••••' : '输入 Azure API Key')
+                                                                                ? (hasStoredAzureKey ? '••••••••••••' : '输入 Azure API 密钥')
                                                                                 : sttProvider === 'ibmwatson'
-                                                                                    ? (hasStoredIbmWatsonKey ? '••••••••••••' : '输入 IBM Watson API Key')
+                                                                                    ? (hasStoredIbmWatsonKey ? '••••••••••••' : '输入 IBM Watson API 密钥')
                                                                                     : sttProvider === 'soniox'
-                                                                                        ? (hasStoredSonioxKey ? '••••••••••••' : '输入 Soniox API Key')
-                                                                                        : (hasStoredDeepgramKey ? '••••••••••••' : '输入 Deepgram API Key')
+                                                                                        ? (hasStoredSonioxKey ? '••••••••••••' : '输入 Soniox API 密钥')
+                                                                                        : (hasStoredDeepgramKey ? '••••••••••••' : '输入 Deepgram API 密钥')
                                                             }
                                                             className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
                                                         />
@@ -2686,7 +2652,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 <button
                                                                     onClick={() => handleRemoveSttKey(sttProvider as any)}
                                                                     className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                                                                    title="移除 API Key"
+                                                                    title="移除 API 密钥"
                                                                 >
                                                                     <Trash2 size={16} strokeWidth={1.5} />
                                                                 </button>
@@ -2735,7 +2701,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     type="text"
                                                                     value={sttAzureRegion}
                                                                     onChange={(e) => setSttAzureRegion(e.target.value)}
-                                                                    placeholder="e.g. eastus"
+                                                                    placeholder="例如 eastus"
                                                                     className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
                                                                 />
                                                                 <button
@@ -2752,7 +2718,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     保存
                                                                 </button>
                                                             </div>
-                                                            <p className="text-[10px] text-text-tertiary">e.g. eastus, westeurope, westus2</p>
+                                                            <p className="text-[10px] text-text-tertiary">例如 eastus、westeurope、westus2</p>
                                                         </div>
                                                     )}
 
@@ -2787,7 +2753,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 }
                                                             }}
                                                             className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors ml-1"
-                                                            title="获取 API Key"
+                                                                    title="获取 API 密钥"
                                                         >
                                                             <ExternalLink size={12} />
                                                         </button>
@@ -2801,9 +2767,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-3">
                                                 <div className="flex items-center justify-between gap-3">
                                                     <div>
-                                                        <h4 className="text-sm font-semibold text-text-primary">Technical Glossary</h4>
+                                                        <h4 className="text-sm font-semibold text-text-primary">热词表</h4>
                                                         <p className="text-xs text-text-secondary mt-1">
-                                                            One term per line. Optional format: <code>term | weight</code>.
+                                                            每行一个词。可选格式：<code>术语 | 权重</code>。
                                                         </p>
                                                     </div>
                                                     <button
@@ -2811,7 +2777,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={glossarySaving}
                                                         className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${glossarySaved ? 'bg-green-500/20 text-green-400' : 'bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary'}`}
                                                     >
-                                                        {glossarySaving ? 'Saving...' : glossarySaved ? 'Saved' : 'Save Glossary'}
+                                                        {glossarySaving ? '保存中...' : glossarySaved ? '已保存' : '保存热词表'}
                                                     </button>
                                                 </div>
 
@@ -2825,48 +2791,62 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                     <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-text-secondary block">Alibaba Workspace ID</label>
+                                                        <label className="text-xs font-medium text-text-secondary block">阿里云工作区 ID</label>
                                                         <input
                                                             type="text"
                                                             value={alibabaWorkspaceId}
                                                             onChange={(e) => setAlibabaWorkspaceId(e.target.value)}
-                                                            placeholder="Optional workspace id"
+                                                            placeholder="可选，填写 workspace id"
                                                             className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
                                                         />
                                                     </div>
                                                     <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-text-secondary block">Alibaba Vocabulary ID</label>
+                                                        <label className="text-xs font-medium text-text-secondary block">阿里云热词表 ID</label>
                                                         <input
                                                             type="text"
                                                             value={alibabaVocabularyId}
                                                             onChange={(e) => setAlibabaVocabularyId(e.target.value)}
-                                                            placeholder="Optional vocabulary_id"
+                                                            placeholder="可选，填写 vocabulary_id"
                                                             className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
                                                         />
                                                     </div>
                                                 </div>
 
                                                 <p className="text-[11px] text-text-tertiary">
-                                                    OpenAI realtime transcription uses the glossary as a prompt. Alibaba Paraformer will use the optional <code>vocabulary_id</code> when provided.
+                                                    OpenAI 实时转写会把这份热词表当作提示词使用。阿里云 Paraformer 和 Fun-ASR 会基于同一份热词源数据同步各自模型专属的热词表。
                                                 </p>
+                                                {glossarySaveMessage && (
+                                                    <div className={`rounded-lg border px-3 py-2 text-xs ${glossarySaveMessage.includes('失败') || glossarySaveMessage.toLowerCase().includes('failed') || glossarySaveMessage.toLowerCase().includes('error')
+                                                        ? 'border-red-500/20 bg-red-500/10 text-red-300'
+                                                        : 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200'
+                                                        }`}>
+                                                        {glossarySaveMessage}
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <div className="bg-bg-card rounded-xl border border-border-subtle p-4 space-y-4">
                                                 <div className="flex items-center justify-between gap-3">
                                                     <div>
-                                                        <h4 className="text-sm font-semibold text-text-primary">STT Compare</h4>
+                                                        <h4 className="text-sm font-semibold text-text-primary">STT 对比</h4>
                                                         <p className="text-xs text-text-secondary mt-1">
-                                                            Shadow-run the current provider alongside OpenAI and Alibaba on the same meeting audio.
+                                                            在同一份会议音频上并行运行当前主模型、OpenAI 和 Fun-ASR 做对比。
                                                         </p>
                                                     </div>
                                                     <div className="flex gap-2">
+                                                        <button
+                                                            onClick={() => window.electronAPI?.openSttCompareWindow?.()}
+                                                            className="px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary"
+                                                        >
+                                                            打开独立对比窗口
+                                                        </button>
                                                         {(sttCompareResults?.active) ? (
                                                             <button
                                                                 onClick={handleStopSttCompare}
                                                                 disabled={sttCompareBusy !== 'idle'}
                                                                 className="px-4 py-2 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 disabled:opacity-50"
                                                             >
-                                                                {sttCompareBusy === 'stopping' ? 'Stopping...' : 'Stop Compare'}
+                                                                {sttCompareBusy === 'stopping' ? '停止中...' : '停止对比'}
                                                             </button>
                                                         ) : (
                                                             <button
@@ -2874,7 +2854,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 disabled={sttCompareBusy !== 'idle'}
                                                                 className="px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary disabled:opacity-50"
                                                             >
-                                                                {sttCompareBusy === 'starting' ? 'Starting...' : 'Start Compare'}
+                                                                {sttCompareBusy === 'starting' ? '启动中...' : '开始对比'}
                                                             </button>
                                                         )}
                                                         <button
@@ -2882,7 +2862,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             disabled={sttCompareBusy !== 'idle' || !(sttCompareResults?.utterances?.length > 0)}
                                                             className="px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary disabled:opacity-50"
                                                         >
-                                                            {sttCompareBusy === 'exporting' ? 'Exporting...' : 'Export Report'}
+                                                            {sttCompareBusy === 'exporting' ? '导出中...' : '导出报告'}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -2900,16 +2880,16 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             <div key={provider.id} className="rounded-lg border border-border-subtle bg-bg-input p-3 space-y-1.5">
                                                                 <div className="flex items-center justify-between gap-2">
                                                                     <span className="text-sm font-medium text-text-primary">{provider.label}</span>
-                                                                    {!provider.available && <span className="text-[10px] text-amber-400">Missing key</span>}
+                                                                    {!provider.available && <span className="text-[10px] text-amber-400">缺少密钥</span>}
                                                                 </div>
                                                                 <p className="text-[11px] text-text-secondary">
-                                                                    Avg first partial: {summary?.avgFirstPartialLatencyMs ?? 'n/a'} ms
+                                                                    平均首包：{summary?.avgFirstPartialLatencyMs ?? '暂无'} ms
                                                                 </p>
                                                                 <p className="text-[11px] text-text-secondary">
-                                                                    Avg final: {summary?.avgFinalLatencyMs ?? 'n/a'} ms
+                                                                    平均最终稿：{summary?.avgFinalLatencyMs ?? '暂无'} ms
                                                                 </p>
                                                                 <p className="text-[11px] text-text-secondary">
-                                                                    Term hits: {summary?.technicalTerms?.join(', ') || 'none'}
+                                                                    热词命中：{summary?.technicalTerms?.join(', ') || '暂无'}
                                                                 </p>
                                                                 {!provider.available && provider.reason && (
                                                                     <p className="text-[11px] text-text-tertiary">{provider.reason}</p>
@@ -2921,22 +2901,22 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                                 <div className="space-y-3">
                                                     {(sttCompareResults?.utterances || []).slice(-6).reverse().map((utterance: any) => (
-                                                        <div key={utterance.id} className="rounded-lg border border-border-subtle bg-bg-input p-3 space-y-2">
-                                                            <div className="flex items-center justify-between gap-3">
-                                                                <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">{utterance.speaker}</span>
-                                                                <span className="text-[11px] text-text-tertiary">{utterance.audioBytes} bytes</span>
+                                                            <div key={utterance.id} className="rounded-lg border border-border-subtle bg-bg-input p-3 space-y-2">
+                                                                <div className="flex items-center justify-between gap-3">
+                                                                <span className="text-xs font-semibold text-text-primary uppercase tracking-wide">{utterance.speaker === 'user' ? '候选人' : '面试官'}</span>
+                                                                <span className="text-[11px] text-text-tertiary">{utterance.audioBytes} 字节</span>
                                                             </div>
                                                             {Object.values(utterance.providerResults || {}).map((provider: any) => (
                                                                 <div key={provider.providerId} className="text-[12px] text-text-secondary">
                                                                     <span className="font-medium text-text-primary">{provider.label}: </span>
-                                                                    <span>{provider.finalText || provider.partialText || '(no transcript yet)'}</span>
+                                                                    <span>{provider.finalText || provider.partialText || '（暂无转写结果）'}</span>
                                                                 </div>
                                                             ))}
                                                         </div>
                                                     ))}
                                                     {(!sttCompareResults?.utterances || sttCompareResults.utterances.length === 0) && (
                                                         <div className="text-xs text-text-secondary">
-                                                            No compare samples yet. Start a compare session and let the app receive some microphone or system audio.
+                                                            还没有对比样本。先启动对比会话，并让应用接收到一些麦克风或系统音频。
                                                         </div>
                                                     )}
                                                 </div>
@@ -3126,7 +3106,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         <Calendar size={20} />
                                                     </div>
                                                     <div>
-                                                        <h4 className="text-sm font-medium text-text-primary">Google Calendar</h4>
+                                                        <h4 className="text-sm font-medium text-text-primary">Google 日历</h4>
                                                         <p className="text-xs text-text-secondary">当前连接账号：{calendarStatus.email || '用户'}</p>
                                                     </div>
                                                 </div>

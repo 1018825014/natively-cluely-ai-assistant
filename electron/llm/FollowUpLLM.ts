@@ -1,5 +1,5 @@
-import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
+import { LLMHelper, StreamChatRouteOptions } from "../LLMHelper";
+import { PromptLabService } from "../services/PromptLabService";
 
 export class FollowUpLLM {
     private llmHelper: LLMHelper;
@@ -8,10 +8,25 @@ export class FollowUpLLM {
         this.llmHelper = llmHelper;
     }
 
-    async generate(previousAnswer: string, refinementRequest: string, context?: string): Promise<string> {
+    async generate(
+        previousAnswer: string,
+        refinementRequest: string,
+        context?: string,
+        routeOptions?: StreamChatRouteOptions
+    ): Promise<string> {
         try {
-            const message = `PREVIOUS ANSWER:\n${previousAnswer}\n\nREQUEST: ${refinementRequest}`;
-            const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+            const built = PromptLabService.getInstance().buildFollowUpExecution({
+                previousAnswer,
+                refinementRequest,
+                context,
+            }, this.llmHelper);
+            const stream = this.llmHelper.streamChat(
+                built.message,
+                undefined,
+                context,
+                built.systemPrompt,
+                routeOptions
+            );
             let full = "";
             for await (const chunk of stream) full += chunk;
             return full;
@@ -21,10 +36,26 @@ export class FollowUpLLM {
         }
     }
 
-    async *generateStream(previousAnswer: string, refinementRequest: string, context?: string): AsyncGenerator<string> {
+    async *generateStream(
+        previousAnswer: string,
+        refinementRequest: string,
+        context?: string,
+        routeOptions?: StreamChatRouteOptions
+    ): AsyncGenerator<string> {
         try {
-            const message = `PREVIOUS ANSWER:\n${previousAnswer}\n\nREQUEST: ${refinementRequest}`;
-            yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+            const built = PromptLabService.getInstance().buildFollowUpExecution({
+                previousAnswer,
+                refinementRequest,
+                context,
+                lane: routeOptions?.disableFastPath ? 'strong' : 'primary',
+            }, this.llmHelper);
+            yield* this.llmHelper.streamChat(
+                built.message,
+                undefined,
+                context,
+                built.systemPrompt,
+                routeOptions
+            );
         } catch (e) {
             console.error("[FollowUpLLM] Stream Failed:", e);
         }

@@ -1,15 +1,19 @@
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { ChevronUp, ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import icon from "../icon.png";
 
 interface TopPillProps {
     expanded: boolean;
+    isMaximized?: boolean;
     onToggle: () => void;
+    onToggleMaximize?: () => void;
     onQuit: () => void;
 }
 
 export default function TopPill({
     expanded,
+    isMaximized = false,
     onToggle,
+    onToggleMaximize,
     onQuit,
 }: TopPillProps) {
     return (
@@ -73,7 +77,27 @@ export default function TopPill({
                             <ChevronDown className="w-3.5 h-3.5" />
                         )}
                     </span>
-                    <span className="tracking-wide opacity-80 group-hover:opacity-100">{expanded ? "Hide" : "Show"}</span>
+                    <span className="tracking-wide opacity-80 group-hover:opacity-100">{expanded ? "隐藏" : "显示"}</span>
+                </button>
+
+                <button
+                    onClick={onToggleMaximize}
+                    className="
+            w-8 h-8
+            rounded-full
+            bg-white/5
+            flex items-center justify-center
+            text-white
+            interaction-base interaction-press
+            hover:bg-white/10 hover:text-white
+          "
+                    title={isMaximized ? "恢复原大小" : "最大化"}
+                >
+                    {isMaximized ? (
+                        <Minimize2 className="w-3.5 h-3.5 opacity-80" />
+                    ) : (
+                        <Maximize2 className="w-3.5 h-3.5 opacity-80" />
+                    )}
                 </button>
 
                 {/* STOP / QUIT BUTTON */}

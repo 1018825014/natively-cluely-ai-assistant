@@ -6,6 +6,10 @@ import SettingsPopup from "./components/SettingsPopup" // Keeping for legacy/spe
 import Launcher from "./components/Launcher"
 import ModelSelectorWindow from "./components/ModelSelectorWindow"
 import SettingsOverlay from "./components/SettingsOverlay"
+import TraceWindow from "./components/TraceWindow"
+import RawTranscriptWindow from "./components/RawTranscriptWindow"
+import SttCompareWindow from "./components/SttCompareWindow"
+import PromptLabWindow from "./components/PromptLabWindow"
 import StartupSequence from "./components/StartupSequence"
 import { AnimatePresence, motion } from "framer-motion"
 import UpdateBanner from "./components/UpdateBanner"
@@ -30,9 +34,13 @@ const App: React.FC = () => {
   const isOverlayWindow = new URLSearchParams(window.location.search).get('window') === 'overlay';
   const isModelSelectorWindow = new URLSearchParams(window.location.search).get('window') === 'model-selector';
   const isCropperWindow = new URLSearchParams(window.location.search).get('window') === 'cropper';
+  const isTraceWindow = new URLSearchParams(window.location.search).get('window') === 'trace';
+  const isRawTranscriptWindow = new URLSearchParams(window.location.search).get('window') === 'raw-stt';
+  const isSttCompareWindow = new URLSearchParams(window.location.search).get('window') === 'stt-compare';
+  const isPromptLabWindow = new URLSearchParams(window.location.search).get('window') === 'prompt-lab';
 
   // Default to launcher if not specified (dev mode safety)
-  const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !isCropperWindow;
+  const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !isCropperWindow && !isTraceWindow && !isRawTranscriptWindow && !isSttCompareWindow && !isPromptLabWindow;
 
   if (isCropperWindow) {
     const Cropper = React.lazy(() => import('./components/Cropper'));
@@ -278,6 +286,66 @@ const App: React.FC = () => {
     );
   }
 
+  if (isTraceWindow) {
+    return (
+      <ErrorBoundary context="TraceWindow">
+        <div className="h-full min-h-0 w-full overflow-hidden">
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <TraceWindow />
+              <ToastViewport />
+            </ToastProvider>
+          </QueryClientProvider>
+        </div>
+      </ErrorBoundary>
+    );
+  }
+
+  if (isRawTranscriptWindow) {
+    return (
+      <ErrorBoundary context="RawTranscriptWindow">
+        <div className="h-full min-h-0 w-full overflow-hidden">
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <RawTranscriptWindow />
+              <ToastViewport />
+            </ToastProvider>
+          </QueryClientProvider>
+        </div>
+      </ErrorBoundary>
+    )
+  }
+
+  if (isSttCompareWindow) {
+    return (
+      <ErrorBoundary context="SttCompareWindow">
+        <div className="h-full min-h-0 w-full overflow-hidden">
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <SttCompareWindow />
+              <ToastViewport />
+            </ToastProvider>
+          </QueryClientProvider>
+        </div>
+      </ErrorBoundary>
+    )
+  }
+
+  if (isPromptLabWindow) {
+    return (
+      <ErrorBoundary context="PromptLabWindow">
+        <div className="h-full min-h-0 w-full overflow-hidden">
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <PromptLabWindow />
+              <ToastViewport />
+            </ToastProvider>
+          </QueryClientProvider>
+        </div>
+      </ErrorBoundary>
+    )
+  }
+
   // --- OVERLAY WINDOW (Meeting Interface) ---
   if (isOverlayWindow) {
     return (
@@ -444,8 +512,8 @@ const App: React.FC = () => {
         onDeactivated={() => setIsPremiumActive(false)}
       />
     </div>
-    </ErrorBoundary>
-  )
-}
+      </ErrorBoundary>
+    )
+  }
 
 export default App

@@ -9,12 +9,12 @@
 
 import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
-import { SessionTracker } from './SessionTracker';
+import { SessionTracker, LiveTranscriptSegment } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
 
 // Re-export types for backward compatibility
-export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
+export type { TranscriptSegment, SuggestionTrigger, ContextItem, LiveTranscriptSegment } from './SessionTracker';
 export type { IntelligenceMode, IntelligenceModeEvents } from './IntelligenceEngine';
 
 export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
@@ -83,6 +83,10 @@ export class IntelligenceManager extends EventEmitter {
         this.session.setMeetingMetadata(metadata);
     }
 
+    private emitLiveTranscriptUpdated(): void {
+        this.emit('live_transcript_updated', this.session.getLiveTranscriptState());
+    }
+
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {
         if (skipRefinementCheck) {
             // Direct add without refinement detection
@@ -91,6 +95,7 @@ export class IntelligenceManager extends EventEmitter {
             // Let the engine handle transcript + refinement detection
             this.engine.handleTranscript(segment, false);
         }
+        this.emitLiveTranscriptUpdated();
     }
 
     addAssistantMessage(text: string): void {
@@ -105,6 +110,10 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastAssistantMessage();
     }
 
+    getAssistantResponseHistory() {
+        return this.session.getAssistantResponseHistory();
+    }
+
     getFormattedContext(lastSeconds: number = 120): string {
         return this.session.getFormattedContext(lastSeconds);
     }
@@ -117,12 +126,49 @@ export class IntelligenceManager extends EventEmitter {
         this.session.logUsage(type, question, answer);
     }
 
+    getLiveTranscriptState(): LiveTranscriptSegment[] {
+        return this.session.getLiveTranscriptState();
+    }
+
+    editLiveTranscriptSegment(id: string, text: string): LiveTranscriptSegment | null {
+        const updated = this.session.editLiveTranscriptSegment(id, text);
+        if (updated) this.emitLiveTranscriptUpdated();
+        return updated;
+    }
+
+    mergeLiveTranscriptSegmentWithPrevious(id: string): { state: LiveTranscriptSegment[]; mergedIntoId: string; cursorPosition: number } | null {
+        const result = this.session.mergeLiveTranscriptSegmentWithPrevious(id);
+        if (result) this.emitLiveTranscriptUpdated();
+        return result;
+    }
+
+    commitLiveTranscriptSegment(id?: string, speaker: 'interviewer' | 'user' = 'interviewer'): LiveTranscriptSegment | null {
+        const committed = this.session.commitLiveTranscriptSegment(id, speaker);
+        if (committed) this.emitLiveTranscriptUpdated();
+        return committed;
+    }
+
+    maybeCommitLiveTranscriptSegment(id?: string, speaker: 'interviewer' | 'user' = 'interviewer'): LiveTranscriptSegment | null {
+        const committed = this.session.maybeCommitLiveTranscriptSegment(id, speaker);
+        this.emitLiveTranscriptUpdated();
+        return committed;
+    }
+
+    hasEditedLiveTranscript(): boolean {
+        return this.session.hasEditedLiveTranscript();
+    }
+
+    getTranscriptForRag(includeActiveInterviewer: boolean = true): Array<{ speaker: string; text: string; timestamp: number }> {
+        return this.session.getTranscriptForRag(includeActiveInterviewer);
+    }
+
     // ============================================
     // Transcript Handling (delegates to engine)
     // ============================================
 
     handleTranscript(segment: import('./SessionTracker').TranscriptSegment): void {
         this.engine.handleTranscript(segment);
+        this.emitLiveTranscriptUpdated();
     }
 
     async handleSuggestionTrigger(trigger: import('./SessionTracker').SuggestionTrigger): Promise<void> {
@@ -137,12 +183,16 @@ export class IntelligenceManager extends EventEmitter {
         return this.engine.runAssistMode();
     }
 
-    async runWhatShouldISay(question?: string, confidence?: number, imagePaths?: string[]): Promise<string | null> {
-        return this.engine.runWhatShouldISay(question, confidence, imagePaths);
+    async runWhatShouldISay(question?: string, confidence?: number, imagePaths?: string[], requestId?: string): Promise<string | null> {
+        return this.engine.runWhatShouldISay(question, confidence, imagePaths, requestId);
     }
 
-    async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
-        return this.engine.runFollowUp(intent, userRequest);
+    async runFollowUp(
+        intent: string,
+        userRequest?: string,
+        source?: { lane?: 'primary' | 'strong'; answer?: string; requestId?: string }
+    ): Promise<string | null> {
+        return this.engine.runFollowUp(intent, userRequest, source);
     }
 
     async runRecap(): Promise<string | null> {
@@ -175,7 +225,8 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
     async stopMeeting(): Promise<void> {
-        return this.persistence.stopMeeting();
+        await this.persistence.stopMeeting();
+        this.emitLiveTranscriptUpdated();
     }
 
     async recoverUnprocessedMeetings(): Promise<void> {
@@ -189,5 +240,6 @@ export class IntelligenceManager extends EventEmitter {
     reset(): void {
         this.session.reset();
         this.engine.reset();
+        this.emitLiveTranscriptUpdated();
     }
 }
