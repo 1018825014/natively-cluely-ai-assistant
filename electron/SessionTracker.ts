@@ -73,6 +73,7 @@ export class SessionTracker {
     private isCompacting: boolean = false;
     private liveTranscriptSegments: LiveTranscriptSegment[] = [];
     private lastInterimInterviewer: TranscriptSegment | null = null;
+    private lastInterimUser: TranscriptSegment | null = null;
     private liveTranscriptHasEdits = false;
     private recapLLM: RecapLLM | null = null;
 
@@ -204,12 +205,8 @@ export class SessionTracker {
         const target = id ? this.liveTranscriptSegments.find(segment => segment.id === id) : this.getActiveLiveSegment(speaker);
         if (!target || target.status === 'final') return null;
 
-        if (speaker !== 'interviewer') {
-            return this.finalizeLiveTranscriptSegment(target.id, Date.now());
-        }
-
-        if (!this.shouldFinalizeInterviewerSegment(target)) {
-            this.lastInterimInterviewer = this.toTranscriptSegment(target, false);
+        if (!this.shouldFinalizeLiveTranscriptSegment(target)) {
+            this.setLastInterimSegment(target.speaker, this.toTranscriptSegment(target, false));
             return null;
         }
 
@@ -228,9 +225,7 @@ export class SessionTracker {
         this.liveTranscriptHasEdits = true;
 
         if (target.status === 'active') {
-            if (target.speaker === 'interviewer') {
-                this.lastInterimInterviewer = this.toTranscriptSegment(target, false);
-            }
+            this.setLastInterimSegment(target.speaker, this.toTranscriptSegment(target, false));
         } else {
             this.syncCommittedInterviewerSegment(target);
         }
@@ -274,11 +269,10 @@ export class SessionTracker {
             this.removeCommittedSegmentById(previous.id);
         }
 
-        if (previous.speaker === 'interviewer') {
-            this.lastInterimInterviewer = nextStatus === 'active'
-                ? this.toTranscriptSegment(previous, false)
-                : null;
-        }
+        this.setLastInterimSegment(
+            previous.speaker,
+            nextStatus === 'active' ? this.toTranscriptSegment(previous, false) : null
+        );
 
         if (nextStatus === 'final') {
             this.syncCommittedInterviewerSegment(previous);
@@ -297,9 +291,7 @@ export class SessionTracker {
 
     public clearLiveTranscriptSegments(speaker: 'interviewer' | 'user'): void {
         this.liveTranscriptSegments = this.liveTranscriptSegments.filter(segment => segment.speaker !== speaker);
-        if (speaker === 'interviewer') {
-            this.lastInterimInterviewer = null;
-        }
+        this.setLastInterimSegment(speaker, null);
     }
 
     public hasEditedLiveTranscript(): boolean {
@@ -308,32 +300,41 @@ export class SessionTracker {
 
     public getTranscriptForRag(includeActiveInterviewer: boolean = true): Array<{ speaker: string; text: string; timestamp: number }> {
         const segments = this.fullTranscript.map(segment => ({ speaker: segment.speaker, text: segment.text, timestamp: segment.timestamp }));
-        if (includeActiveInterviewer && this.lastInterimInterviewer?.text.trim()) {
-            const lastFinal = segments[segments.length - 1];
-            const interim = {
-                speaker: this.lastInterimInterviewer.speaker,
-                text: this.lastInterimInterviewer.text.trim(),
-                timestamp: this.lastInterimInterviewer.timestamp,
-            };
-            const isDuplicate = lastFinal && lastFinal.speaker === interim.speaker && this.normalizeTranscriptForComparison(lastFinal.text) === this.normalizeTranscriptForComparison(interim.text);
-            if (!isDuplicate) segments.push(interim);
+        if (includeActiveInterviewer) {
+            const interimSegments = this.getInterimTranscriptSegments();
+            for (const interim of interimSegments) {
+                const isDuplicate = segments.some((item) =>
+                    item.speaker === interim.speaker &&
+                    Math.abs(item.timestamp - interim.timestamp) < 500 &&
+                    this.normalizeTranscriptForComparison(item.text) === this.normalizeTranscriptForComparison(interim.text)
+                );
+                if (!isDuplicate) {
+                    segments.push({
+                        speaker: interim.speaker,
+                        text: interim.text.trim(),
+                        timestamp: interim.timestamp,
+                    });
+                }
+            }
         }
-        return segments;
+        return segments.sort((left, right) => left.timestamp - right.timestamp);
     }
 
     public getContext(lastSeconds: number = 120): ContextItem[] {
         const cutoff = Date.now() - (lastSeconds * 1000);
         const items = this.contextItems.filter(item => item.timestamp >= cutoff);
-        const interim = this.lastInterimInterviewer;
+        const interimSegments = this.getInterimTranscriptSegments();
 
-        if (interim && interim.text.trim().length > 0 && interim.timestamp >= cutoff) {
+        for (const interim of interimSegments) {
+            if (!interim.text.trim() || interim.timestamp < cutoff) continue;
+            const role = this.mapSpeakerToRole(interim.speaker);
             const duplicate = items.some(item =>
-                item.role === 'interviewer' &&
+                item.role === role &&
                 Math.abs(item.timestamp - interim.timestamp) < 500 &&
                 this.normalizeTranscriptForComparison(item.text) === this.normalizeTranscriptForComparison(interim.text)
             );
             if (!duplicate) {
-                items.push({ id: interim.id, role: 'interviewer', text: interim.text, timestamp: interim.timestamp });
+                items.push({ id: interim.id, role, text: interim.text, timestamp: interim.timestamp });
             }
         }
 
@@ -410,8 +411,11 @@ export class SessionTracker {
     }
 
     public flushInterimTranscript(): void {
-        if (this.lastInterimInterviewer?.id) {
-            this.commitLiveTranscriptSegment(this.lastInterimInterviewer.id);
+        for (const speaker of ['interviewer', 'user'] as const) {
+            const interim = this.getLastInterimSegment(speaker);
+            if (interim?.id) {
+                this.commitLiveTranscriptSegment(interim.id, speaker);
+            }
         }
     }
 
@@ -424,6 +428,7 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.lastInterimUser = null;
         this.liveTranscriptSegments = [];
         this.liveTranscriptHasEdits = false;
     }
@@ -440,6 +445,25 @@ export class SessionTracker {
 
     private cloneLiveSegment(segment: LiveTranscriptSegment): LiveTranscriptSegment {
         return { ...segment };
+    }
+
+    private getLastInterimSegment(speaker: 'interviewer' | 'user'): TranscriptSegment | null {
+        return speaker === 'interviewer' ? this.lastInterimInterviewer : this.lastInterimUser;
+    }
+
+    private setLastInterimSegment(speaker: 'interviewer' | 'user', segment: TranscriptSegment | null): void {
+        if (speaker === 'interviewer') {
+            this.lastInterimInterviewer = segment;
+            return;
+        }
+
+        this.lastInterimUser = segment;
+    }
+
+    private getInterimTranscriptSegments(): TranscriptSegment[] {
+        return (['interviewer', 'user'] as const)
+            .map((speaker) => this.getLastInterimSegment(speaker))
+            .filter((segment): segment is TranscriptSegment => Boolean(segment));
     }
 
     private handleLiveSpeakerTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' } | null {
@@ -767,9 +791,7 @@ export class SessionTracker {
 
         target.status = 'final';
         target.updatedAt = Math.max(timestamp, target.updatedAt);
-        if (target.speaker === 'interviewer') {
-            this.lastInterimInterviewer = null;
-        }
+        this.setLastInterimSegment(target.speaker, null);
         this.syncCommittedInterviewerSegment(target);
         return this.cloneLiveSegment(target);
     }
@@ -782,37 +804,30 @@ export class SessionTracker {
             confidence?: number;
         }
     ): void {
-        if (current.speaker !== 'interviewer') {
-            if (options.isIncomingFinal) {
-                this.finalizeLiveTranscriptSegment(current.id, options.timestamp);
-            }
-            return;
-        }
-
         if (current.edited) {
             current.text = current.text.trim();
             current.updatedAt = Math.max(options.timestamp, current.updatedAt);
             current.confidence = options.confidence ?? current.confidence;
-            if (options.isIncomingFinal && this.shouldFinalizeInterviewerSegment(current)) {
+            if (options.isIncomingFinal && this.shouldFinalizeLiveTranscriptSegment(current)) {
                 this.finalizeLiveTranscriptSegment(current.id, options.timestamp);
                 return;
             }
-            this.lastInterimInterviewer = this.toTranscriptSegment(current, false);
+            this.setLastInterimSegment(current.speaker, this.toTranscriptSegment(current, false));
             return;
         }
 
-        const chunks = this.splitInterviewerIntoChunks(current.text);
+        const chunks = this.splitLiveTranscriptIntoChunks(current.text);
         if (chunks.length === 0) return;
 
         if (chunks.length === 1) {
             current.text = chunks[0];
             current.updatedAt = Math.max(options.timestamp, current.updatedAt);
             current.confidence = options.confidence ?? current.confidence;
-            if (options.isIncomingFinal && this.shouldFinalizeInterviewerSegment(current)) {
+            if (options.isIncomingFinal && this.shouldFinalizeLiveTranscriptSegment(current)) {
                 this.finalizeLiveTranscriptSegment(current.id, options.timestamp);
                 return;
             }
-            this.lastInterimInterviewer = this.toTranscriptSegment(current, false);
+            this.setLastInterimSegment(current.speaker, this.toTranscriptSegment(current, false));
             return;
         }
 
@@ -827,7 +842,7 @@ export class SessionTracker {
             if (!nextText) continue;
             const nextSegment: LiveTranscriptSegment = {
                 id: this.createSegmentId(),
-                speaker: 'interviewer',
+                speaker: current.speaker,
                 text: nextText,
                 timestamp: options.timestamp,
                 updatedAt: options.timestamp,
@@ -838,7 +853,7 @@ export class SessionTracker {
                 confidence: options.confidence ?? current.confidence,
             };
 
-            if (!isLast && this.hasRecentSpeakerDuplicate('interviewer', nextSegment.text, options.timestamp)) {
+            if (!isLast && this.hasRecentSpeakerDuplicate(current.speaker, nextSegment.text, options.timestamp)) {
                 continue;
             }
 
@@ -846,21 +861,21 @@ export class SessionTracker {
 
             if (nextSegment.status === 'final') {
                 this.syncCommittedInterviewerSegment(nextSegment);
-                this.lastInterimInterviewer = null;
+                this.setLastInterimSegment(nextSegment.speaker, null);
             } else {
-                this.lastInterimInterviewer = this.toTranscriptSegment(nextSegment, false);
+                this.setLastInterimSegment(nextSegment.speaker, this.toTranscriptSegment(nextSegment, false));
             }
         }
     }
 
-    private shouldFinalizeInterviewerSegment(segment: LiveTranscriptSegment): boolean {
+    private shouldFinalizeLiveTranscriptSegment(segment: LiveTranscriptSegment): boolean {
         return (
             this.normalizeTranscriptForComparison(segment.text).length >= SessionTracker.SOFT_INTERVIEWER_SEGMENT_CHARS &&
             SessionTracker.SENTENCE_BOUNDARY_REGEX.test(segment.text.trim())
         );
     }
 
-    private splitInterviewerIntoChunks(text: string): string[] {
+    private splitLiveTranscriptIntoChunks(text: string): string[] {
         const trimmed = text.trim();
         if (!trimmed) return [];
 

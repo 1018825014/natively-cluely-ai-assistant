@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { DatabaseManager } from '../db/DatabaseManager';
+import { OllamaManager } from '../services/OllamaManager';
 
 export class OllamaBootstrap {
   private baseUrl: string;
@@ -27,25 +27,8 @@ export class OllamaBootstrap {
    */
   async ensureOllamaRunning(): Promise<boolean> {
     if (await this.isOllamaRunning()) return true;
-    
-    // Try to start it
-    try {
-      const child = spawn('ollama', ['serve'], { detached: true, stdio: 'ignore' });
-      child.on('error', (err) => {
-        console.error('[OllamaBootstrap] Failed to spawn ollama (not installed?):', err);
-      });
-      child.unref();
-    } catch (e) {
-      console.error('[OllamaBootstrap] Synchronous error spawning ollama:', e);
-      return false;
-    }
-    
-    // Wait up to 5 seconds for it to come up
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      if (await this.isOllamaRunning()) return true;
-    }
-    return false;
+
+    return OllamaManager.getInstance().ensureRunning(5_000);
   }
 
   /**

@@ -1,10 +1,34 @@
-import path from "path";
+﻿import path from "path";
 import { ProjectAssetParser } from "./ProjectAssetParser";
 import { ProjectKnowledgeStore } from "./ProjectKnowledgeStore";
-import { AnswerMode, DocType, JDProfile, ParsedAssetContent, ProjectRecord, ResumeIdentity, ResumeProjectInput } from "./types";
+import {
+  AnswerMode,
+  AssetRecord,
+  DocType,
+  JDProfile,
+  ParsedAssetContent,
+  ProjectRecord,
+  RepoAttachmentSummary,
+  ResumeIdentity,
+  ResumeImportMapping,
+  ResumeImportPreview,
+  ResumeImportPreviewProject,
+  ResumeProjectInput,
+} from "./types";
 
 type GenerateContentFn = (contents: Array<{ text: string }>) => Promise<string>;
 type EmbedFn = (text: string) => Promise<number[]>;
+
+type PendingResumePreview = {
+  filePath: string;
+  resumeText: string;
+  preview: ResumeImportPreview;
+};
+
+function clampProjectCount(value: number | null | undefined): number {
+  const numeric = Number(value || 3);
+  return Math.min(5, Math.max(1, Number.isFinite(numeric) ? Math.round(numeric) : 3));
+}
 
 function safeJsonParse<T>(value: string, fallback: T): T {
   try {
@@ -119,7 +143,7 @@ function inferSkills(text: string): string[] {
   return candidates.filter((candidate) => lower.includes(candidate)).slice(0, 16);
 }
 
-function fallbackProjectsFromResume(text: string): ResumeProjectInput[] {
+function fallbackProjectsFromResume(text: string, maxProjects: number): ResumeProjectInput[] {
   const sections = text
     .split(/\n{2,}/)
     .map((section) => section.trim())
@@ -129,11 +153,11 @@ function fallbackProjectsFromResume(text: string): ResumeProjectInput[] {
     .map((section) => ({
       section,
       score:
-        (section.match(/project|platform|system|pipeline|app|service|architecture|agent|model|deployment|debug|优化|系统|平台|架构/gi) || []).length +
+        (section.match(/project|platform|system|pipeline|app|service|architecture|agent|model|deployment|debug|浼樺寲|绯荤粺|骞冲彴|鏋舵瀯/gi) || []).length +
         (section.match(/react|typescript|python|node|llm|rag|aws|docker|redis|postgres/gi) || []).length,
     }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
+    .slice(0, maxProjects);
 
   if (!ranked.length) {
     return [
@@ -151,7 +175,7 @@ function fallbackProjectsFromResume(text: string): ResumeProjectInput[] {
   }
 
   return ranked.map((item, index) => ({
-    title: `Project ${index + 1}`,
+    title: maxProjects === 1 ? "Primary Project" : `Project ${index + 1}`,
     summary: snippet(item.section, 260),
     responsibilities: [snippet(item.section, 200)],
     techStack: inferSkills(item.section),
@@ -167,6 +191,7 @@ export class ProjectKnowledgeOrchestrator {
   private embedFn: EmbedFn | null = null;
   private embedQueryFn: EmbedFn | null = null;
   private interviewerBuffer: string[] = [];
+  private pendingResumePreview: PendingResumePreview | null = null;
 
   constructor(private readonly store: ProjectKnowledgeStore) {}
 
@@ -199,6 +224,7 @@ export class ProjectKnowledgeOrchestrator {
       answerMode: state.answerMode,
       jdBiasEnabled: state.jdBiasEnabled,
       activeProjectIds: state.activeProjectIds,
+      preferredResumeProjectCount: state.preferredResumeProjectCount,
       resumeSummary: {
         name: state.identity.name,
         role: state.identity.role,
@@ -225,11 +251,30 @@ export class ProjectKnowledgeOrchestrator {
       activeJD: state.activeJD,
       jdBiasEnabled: state.jdBiasEnabled,
       lastEvidenceHits: state.lastEvidenceHits,
+      preferredResumeProjectCount: state.preferredResumeProjectCount,
     };
   }
 
   public listProjects() {
     return this.store.listProjects();
+  }
+
+  public getProjectDetail(projectId: string) {
+    const project = this.store.getProject(projectId);
+    if (!project) return null;
+    return {
+      project,
+      assets: this.store.listAssets(projectId),
+      repos: this.store.listRepos(projectId),
+    };
+  }
+
+  public listProjectAssets(projectId: string) {
+    return this.store.listAssets(projectId);
+  }
+
+  public listRepos(projectId: string): RepoAttachmentSummary[] {
+    return this.store.listRepos(projectId);
   }
 
   public upsertProject(input: ResumeProjectInput) {
@@ -248,6 +293,14 @@ export class ProjectKnowledgeOrchestrator {
     }
 
     return project;
+  }
+
+  public updateProject(input: ResumeProjectInput) {
+    if (!input.id || !this.store.getProject(input.id)) {
+      return { success: false, error: "Project not found." };
+    }
+    const project = this.upsertProject(input);
+    return { success: true, project };
   }
 
   public getProjectFacts(projectId: string) {
@@ -271,6 +324,7 @@ export class ProjectKnowledgeOrchestrator {
 
   public deleteDocumentsByType(docType: DocType): void {
     if (docType === DocType.RESUME) {
+      this.pendingResumePreview = null;
       this.store.clearAllProjects();
       this.store.setIdentity({});
       this.store.setSkills([]);
@@ -288,13 +342,22 @@ export class ProjectKnowledgeOrchestrator {
   }
 
   public async ingestDocument(filePath: string, docType: DocType) {
+    if (docType === DocType.RESUME) {
+      const projectCount = this.store.getPreferredResumeProjectCount();
+      const previewResult = await this.previewResumeImport({ filePath, projectCount });
+      if (!previewResult.success || !previewResult.preview) return previewResult;
+      return this.applyResumeImport({
+        filePath,
+        projectCount,
+        mappings: [],
+        editedProjects: previewResult.preview.projects,
+        replaceMode: "confirmed_replace",
+      });
+    }
+
     const parsed = await ProjectAssetParser.parseFile(filePath);
     if (!parsed.text.trim()) {
       return { success: false, error: "No readable text found in the selected file." };
-    }
-
-    if (docType === DocType.RESUME) {
-      return this.ingestResume(filePath, parsed.text);
     }
 
     if (docType === DocType.JD) {
@@ -302,6 +365,154 @@ export class ProjectKnowledgeOrchestrator {
     }
 
     return { success: false, error: `Unsupported document type: ${docType}` };
+  }
+
+  public async previewResumeImport(payload: { filePath: string; projectCount?: number }) {
+    const normalizedCount = clampProjectCount(payload.projectCount ?? this.store.getPreferredResumeProjectCount());
+    const parsed = await ProjectAssetParser.parseFile(payload.filePath);
+    if (!parsed.text.trim()) {
+      return { success: false, error: "No readable text found in the selected file." };
+    }
+
+    const preview = await this.buildResumePreview(payload.filePath, parsed.text, normalizedCount);
+    this.store.setPreferredResumeProjectCount(normalizedCount);
+    this.pendingResumePreview = {
+      filePath: path.resolve(payload.filePath),
+      resumeText: parsed.text,
+      preview,
+    };
+
+    return {
+      success: true,
+      preview,
+    };
+  }
+
+  public async applyResumeImport(payload: {
+    filePath: string;
+    projectCount?: number;
+    mappings?: ResumeImportMapping[];
+    editedProjects?: Array<ResumeProjectInput & { previewId?: string }>;
+    replaceMode: "confirmed_replace";
+  }) {
+    if (payload.replaceMode !== "confirmed_replace") {
+      return { success: false, error: "Resume import requires explicit confirmation." };
+    }
+
+    const normalizedCount = clampProjectCount(payload.projectCount ?? this.store.getPreferredResumeProjectCount());
+    this.store.setPreferredResumeProjectCount(normalizedCount);
+
+    const prepared = await this.getOrCreatePendingPreview(payload.filePath, normalizedCount);
+    if (!prepared) {
+      return { success: false, error: "Unable to prepare resume preview." };
+    }
+
+    const preview = prepared.preview;
+    const resumeText = prepared.resumeText;
+    const identity: ResumeIdentity = {
+      name: preview.identity?.name || inferName(resumeText),
+      email: preview.identity?.email || extractEmail(resumeText),
+      role: preview.identity?.role || inferRoleFromResume(resumeText),
+      summary: preview.identity?.summary || "",
+    };
+
+    const editedProjectsByPreviewId = new Map<string, ResumeProjectInput & { previewId?: string }>();
+    for (const project of payload.editedProjects || []) {
+      const previewId = String(project.previewId || project.id || "").trim();
+      if (previewId) editedProjectsByPreviewId.set(previewId, project);
+    }
+
+    const finalProjects = preview.projects.map((project) => {
+      const edited = editedProjectsByPreviewId.get(project.previewId);
+      return this.normalizePreviewProject({
+        ...project,
+        ...(edited || {}),
+        previewId: project.previewId,
+      });
+    });
+
+    const mappingByPreviewId = new Map<string, string>();
+    for (const mapping of payload.mappings || []) {
+      if (mapping.previewId && mapping.projectId) {
+        mappingByPreviewId.set(mapping.previewId, mapping.projectId);
+      }
+    }
+
+    const mappedProjectIds = Array.from(mappingByPreviewId.values());
+    if (new Set(mappedProjectIds).size !== mappedProjectIds.length) {
+      return { success: false, error: "Each existing project can only be mapped once." };
+    }
+
+    const existingProjects = this.store.listProjects();
+    const existingProjectMap = new Map(existingProjects.map((project) => [project.id, project]));
+    const existingJdAsset = this.store.listAssetsByKind("jd")[0] || null;
+    const finalProjectIds: string[] = [];
+
+    this.store.setIdentity(identity);
+    this.store.setSkills(preview.skills?.length ? preview.skills : inferSkills(resumeText));
+
+    for (const previewProject of finalProjects) {
+      const mappedProjectId = mappingByPreviewId.get(previewProject.previewId);
+      const factCard = this.buildFactCardFromInput(previewProject);
+      const project = this.store.upsertProject({
+        id: mappedProjectId && existingProjectMap.has(mappedProjectId) ? mappedProjectId : undefined,
+        title: factCard.title,
+        summary: factCard.summary,
+        factCard,
+        isActive: true,
+      });
+
+      finalProjectIds.push(project.id);
+
+      const existingResumeAssets = this.store
+        .listAssets(project.id)
+        .filter((asset) => asset.kind === "resume")
+        .map((asset) => asset.id);
+      if (existingResumeAssets.length) {
+        this.store.deleteAssets(existingResumeAssets);
+      }
+
+      const excerpt = this.buildProjectResumeExcerpt(previewProject, resumeText);
+      await this.ingestParsedAsset(project.id, {
+        kind: "resume",
+        name: path.basename(prepared.filePath),
+        sourcePath: prepared.filePath,
+        text: excerpt,
+        metadata: {
+          docType: DocType.RESUME,
+          source: "resume",
+          previewId: previewProject.previewId,
+        },
+      });
+    }
+
+    const finalProjectIdSet = new Set(finalProjectIds);
+    const projectsToDelete = existingProjects.map((project) => project.id).filter((projectId) => !finalProjectIdSet.has(projectId));
+    const shouldReattachJD = Boolean(existingJdAsset && projectsToDelete.includes(existingJdAsset.projectId) && finalProjectIds.length);
+
+    if (projectsToDelete.length) {
+      this.store.deleteProjects(projectsToDelete);
+    }
+
+    if (shouldReattachJD && existingJdAsset?.rawText) {
+      await this.ingestParsedAsset(finalProjectIds[0], {
+        kind: "jd",
+        name: existingJdAsset.name,
+        sourcePath: existingJdAsset.sourcePath || "",
+        text: existingJdAsset.rawText,
+        metadata: existingJdAsset.metadata || {},
+      });
+    }
+
+    this.store.setActiveProjectIds(finalProjectIds);
+    this.pendingResumePreview = null;
+
+    return {
+      success: true,
+      projectCount: finalProjectIds.length,
+      identity,
+      projects: this.store.listProjects(),
+    };
   }
 
   public async attachAssets(projectId: string, filePaths: string[]) {
@@ -324,16 +535,70 @@ export class ProjectKnowledgeOrchestrator {
     if (!project) return { success: false, error: "Project not found." };
 
     const parsedAssets = await ProjectAssetParser.parseRepo(repoPath);
+    let attachedCount = 0;
     for (const parsed of parsedAssets) {
       if (!parsed.text.trim()) continue;
       await this.ingestParsedAsset(projectId, parsed);
+      attachedCount += 1;
     }
 
     return {
       success: true,
-      attachedCount: parsedAssets.length,
+      attachedCount,
       repoPath: path.resolve(repoPath),
     };
+  }
+
+  public async updateAssetText(assetId: string, rawText: string) {
+    const asset = this.store.getAsset(assetId);
+    if (!asset) return { success: false, error: "Asset not found." };
+    if (asset.kind === "repo" || asset.kind === "code_file") {
+      return { success: false, error: "Use repo management actions for repository assets." };
+    }
+
+    const updatedAsset = await this.rebuildAssetText(asset, rawText);
+    if (!updatedAsset) return { success: false, error: "Failed to update asset text." };
+    return { success: true, asset: updatedAsset };
+  }
+
+  public deleteAsset(assetId: string) {
+    const asset = this.store.getAsset(assetId);
+    if (!asset) return { success: false, error: "Asset not found." };
+    if (asset.kind === "repo" || asset.kind === "code_file") {
+      return { success: false, error: "Use repo management actions for repository assets." };
+    }
+
+    this.store.deleteAsset(assetId);
+    return { success: true };
+  }
+
+  public async replaceRepo(projectId: string, repoRoot: string, repoPath: string) {
+    const project = this.store.getProject(projectId);
+    if (!project) return { success: false, error: "Project not found." };
+
+    this.deleteRepoGroup(projectId, repoRoot);
+    return this.attachRepo(projectId, repoPath);
+  }
+
+  public async reindexRepo(projectId: string, repoRoot: string) {
+    const project = this.store.getProject(projectId);
+    if (!project) return { success: false, error: "Project not found." };
+
+    const repo = this.store.listRepos(projectId).find((entry) => entry.repoRoot === repoRoot);
+    if (!repo?.sourcePath) {
+      return { success: false, error: "Repository source path not found." };
+    }
+
+    this.deleteRepoGroup(projectId, repoRoot);
+    return this.attachRepo(projectId, repo.sourcePath);
+  }
+
+  public deleteRepo(projectId: string, repoRoot: string) {
+    const project = this.store.getProject(projectId);
+    if (!project) return { success: false, error: "Project not found." };
+
+    this.deleteRepoGroup(projectId, repoRoot);
+    return { success: true };
   }
 
   public feedInterviewerUtterance(message: string): void {
@@ -417,46 +682,77 @@ export class ProjectKnowledgeOrchestrator {
     };
   }
 
-  private async ingestResume(filePath: string, resumeText: string) {
-    const extracted = await this.extractResumeKnowledge(resumeText);
+  private async getOrCreatePendingPreview(filePath: string, projectCount: number): Promise<PendingResumePreview | null> {
+    const resolvedPath = path.resolve(filePath);
+    if (
+      this.pendingResumePreview &&
+      this.pendingResumePreview.filePath === resolvedPath &&
+      this.pendingResumePreview.preview.projectCount === projectCount
+    ) {
+      return this.pendingResumePreview;
+    }
+
+    const previewResult = await this.previewResumeImport({ filePath: resolvedPath, projectCount });
+    return previewResult.success && previewResult.preview ? this.pendingResumePreview : null;
+  }
+
+  private async buildResumePreview(filePath: string, resumeText: string, projectCount: number): Promise<ResumeImportPreview> {
+    const extracted = await this.extractResumeKnowledge(resumeText, projectCount);
     const identity: ResumeIdentity = {
       name: extracted.identity?.name || inferName(resumeText),
       email: extracted.identity?.email || extractEmail(resumeText),
       role: extracted.identity?.role || inferRoleFromResume(resumeText),
       summary: extracted.identity?.summary || "",
     };
+    const rawProjects = (extracted.projects?.length ? extracted.projects : fallbackProjectsFromResume(resumeText, projectCount)).slice(0, projectCount);
+    const projects = rawProjects.map((project, index) =>
+      this.normalizePreviewProject({
+        ...project,
+        previewId: `preview-${index + 1}`,
+        sourceExcerpt: this.buildProjectResumeExcerpt(project, resumeText),
+      })
+    );
 
-    const projects = (extracted.projects?.length ? extracted.projects : fallbackProjectsFromResume(resumeText)).slice(0, 3);
-    this.store.clearAllProjects();
-    this.store.setIdentity(identity);
-    this.store.setSkills(extracted.skills?.length ? extracted.skills : inferSkills(resumeText));
+    return {
+      filePath: path.resolve(filePath),
+      identity,
+      skills: extracted.skills?.length ? extracted.skills : inferSkills(resumeText),
+      projectCount,
+      projects,
+      createdAt: new Date().toISOString(),
+    };
+  }
 
-    const createdProjects = [];
-    for (const projectInput of projects) {
-      const factCard = this.buildFactCardFromInput(projectInput);
-      const project = this.store.upsertProject({
-        title: factCard.title,
-        summary: factCard.summary,
-        factCard,
-        isActive: true,
-      });
-      createdProjects.push(project);
+  private normalizePreviewProject(project: ResumeImportPreviewProject): ResumeImportPreviewProject {
+    return {
+      previewId: project.previewId,
+      title: String(project.title || "").trim() || "Untitled Project",
+      summary: String(project.summary || "").trim(),
+      role: String(project.role || "").trim(),
+      responsibilities: dedupeList(project.responsibilities),
+      techStack: dedupeList(project.techStack),
+      modules: dedupeList(project.modules),
+      metrics: dedupeList(project.metrics),
+      highlights: dedupeList(project.highlights),
+      keywords: dedupeList(project.keywords),
+      sourceExcerpt: String(project.sourceExcerpt || "").trim(),
+      isActive: project.isActive,
+    };
+  }
 
-      const excerpt = this.buildProjectResumeExcerpt(projectInput, resumeText);
-      await this.ingestParsedAsset(project.id, {
-        kind: "resume",
-        name: path.basename(filePath),
-        sourcePath: filePath,
-        text: excerpt,
-        metadata: {
-          docType: DocType.RESUME,
-          source: "resume",
-        },
-      });
+  private deleteRepoGroup(projectId: string, repoRoot: string): void {
+    const repoAssetIds = this.store
+      .listAssets(projectId)
+      .filter((asset) => {
+        if (asset.kind !== "repo" && asset.kind !== "code_file") return false;
+        const assetRepoRoot = asset.metadata?.repoRoot || (asset.kind === "repo" ? asset.sourcePath : null);
+        return assetRepoRoot === repoRoot;
+      })
+      .map((asset) => asset.id);
+
+    if (repoAssetIds.length) {
+      this.store.deleteAssets(repoAssetIds);
     }
-
-    this.store.setActiveProjectIds(createdProjects.map((project) => project.id));
-    return { success: true, projectCount: createdProjects.length, identity };
   }
 
   private async ingestJD(filePath: string, jdText: string) {
@@ -466,6 +762,14 @@ export class ProjectKnowledgeOrchestrator {
 
     const targetProjectId = this.store.getActiveProjectIds()[0] || this.store.listProjects()[0]?.id;
     if (targetProjectId) {
+      const existingJdAssets = this.store
+        .listAssets(targetProjectId)
+        .filter((asset) => asset.kind === "jd")
+        .map((asset) => asset.id);
+      if (existingJdAssets.length) {
+        this.store.deleteAssets(existingJdAssets);
+      }
+
       await this.ingestParsedAsset(targetProjectId, {
         kind: "jd",
         name: path.basename(filePath),
@@ -510,6 +814,50 @@ export class ProjectKnowledgeOrchestrator {
       .join("\n");
   }
 
+  private async rebuildAssetText(asset: AssetRecord, rawText: string) {
+    const parsed: ParsedAssetContent = {
+      kind: asset.kind,
+      name: asset.name,
+      sourcePath: asset.sourcePath || "",
+      text: rawText,
+      metadata: asset.metadata || {},
+    };
+
+    const chunks = chunkText(parsed.text, parsed.kind === "code_file" ? 1500 : 1100, parsed.kind === "code_file" ? 250 : 200);
+    const storedChunks: Array<{
+      chunkType: string;
+      content: string;
+      embedding: number[] | null;
+      metadata: Record<string, any>;
+    }> = [];
+
+    for (const [index, content] of chunks.entries()) {
+      const chunkType = parsed.kind === "repo" ? "repo_summary" : parsed.kind === "code_file" ? "code" : "document";
+      storedChunks.push({
+        chunkType,
+        content,
+        embedding: await this.safeEmbed(this.embedFn, content),
+        metadata: {
+          ...(parsed.metadata || {}),
+          sourcePath: asset.sourcePath,
+          part: index + 1,
+        },
+      });
+    }
+
+    return this.store.replaceAssetChunks(
+      asset.id,
+      {
+        kind: parsed.kind,
+        name: parsed.name,
+        sourcePath: asset.sourcePath,
+        rawText: parsed.text,
+        metadata: parsed.metadata,
+      },
+      storedChunks
+    );
+  }
+
   private async ingestParsedAsset(projectId: string, parsed: ParsedAssetContent) {
     const chunks = chunkText(parsed.text, parsed.kind === "code_file" ? 1500 : 1100, parsed.kind === "code_file" ? 250 : 200);
     const storedChunks = [];
@@ -537,7 +885,7 @@ export class ProjectKnowledgeOrchestrator {
       });
     }
 
-    this.store.replaceProjectChunks(
+    return this.store.replaceProjectChunks(
       projectId,
       {
         kind: parsed.kind,
@@ -550,7 +898,10 @@ export class ProjectKnowledgeOrchestrator {
     );
   }
 
-  private async extractResumeKnowledge(resumeText: string): Promise<{
+  private async extractResumeKnowledge(
+    resumeText: string,
+    projectCount: number
+  ): Promise<{
     identity?: ResumeIdentity;
     skills?: string[];
     projects?: ResumeProjectInput[];
@@ -563,7 +914,7 @@ export class ProjectKnowledgeOrchestrator {
           role: inferRoleFromResume(resumeText),
         },
         skills: inferSkills(resumeText),
-        projects: fallbackProjectsFromResume(resumeText),
+        projects: fallbackProjectsFromResume(resumeText, projectCount),
       };
     }
 
@@ -589,7 +940,7 @@ Return JSON only with this shape:
   ]
 }
 Rules:
-- Keep at most 3 projects.
+- Keep at most ${projectCount} projects.
 - Prefer the most technically deep projects.
 - Use empty arrays instead of null.
 - Use concise, concrete summaries.
@@ -607,7 +958,7 @@ ${resumeText.slice(0, 12000)}
       return {
         identity: parsed.identity || {},
         skills: dedupeList(parsed.skills),
-        projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+        projects: Array.isArray(parsed.projects) ? parsed.projects.slice(0, projectCount) : [],
       };
     } catch (error) {
       console.warn("[ProjectKnowledgeOrchestrator] Failed to extract resume JSON:", error);
@@ -618,7 +969,7 @@ ${resumeText.slice(0, 12000)}
           role: inferRoleFromResume(resumeText),
         },
         skills: inferSkills(resumeText),
-        projects: fallbackProjectsFromResume(resumeText),
+        projects: fallbackProjectsFromResume(resumeText, projectCount),
       };
     }
   }
@@ -687,16 +1038,16 @@ ${jdText.slice(0, 12000)}
 
   private classifyQuestion(message: string): string {
     const lower = message.toLowerCase();
-    if (/introduce yourself|tell me about yourself|walk me through your background|自我介绍|介绍一下你自己/.test(lower)) {
+    if (/introduce yourself|tell me about yourself|walk me through your background/.test(lower)) {
       return "intro";
     }
-    if (/trade[\s-]?off|why|architecture|design|planner|memory|tool routing|为什么|架构|设计|取舍/.test(lower)) {
+    if (/trade[\s-]?off|why|architecture|design|planner|memory|tool routing/.test(lower)) {
       return "architecture";
     }
-    if (/debug|issue|bug|incident|failure|排查|问题|故障|优化/.test(lower)) {
+    if (/debug|issue|bug|incident|failure/.test(lower)) {
       return "debugging";
     }
-    if (/across projects|examples|what experience|有哪些经验|总结/.test(lower)) {
+    if (/across projects|examples|what experience/.test(lower)) {
       return "cross_project";
     }
     return "project_deep_dive";
@@ -731,14 +1082,14 @@ ${jdText.slice(0, 12000)}
         : "For deep-dive questions, prioritize the project-local evidence hits and explain design choices concretely.";
 
     return [
-      "你是用户的项目知识面试副驾。",
-      "把简历中的每一项经历和项目知识库中的每个附件都视为用户本人参与的一手经验，允许用户用第一人称回答。",
-      "不要质疑归属关系，也不要反复强调职责边界。",
+      "You are the user's project-knowledge interview copilot.",
+      "Treat every resume item and attached project asset as first-person experience the user can speak about.",
+      "Do not question ownership or add caveats about who did the work.",
       styleInstruction,
       scopeInstruction,
       introInstruction,
-      '回答时固定分成两部分："Answer" 和 "Evidence"。',
-      '"Evidence" 部分必须包含 2 到 3 条简短 bullet，用来概括支撑结论的依据。',
+      'Always structure the response into two sections: "Answer" and "Evidence".',
+      '"Evidence" must contain 2 to 3 short bullets summarizing the supporting facts.',
     ].join(" ");
   }
 
@@ -752,3 +1103,4 @@ ${jdText.slice(0, 12000)}
     }
   }
 }
+

@@ -290,6 +290,8 @@ export interface ElectronAPI {
   onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => () => void
   setOpenAtLogin: (open: boolean) => Promise<{ success: boolean; error?: string }>
   getOpenAtLogin: () => Promise<boolean>
+  setPhoneInterviewerMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
+  getPhoneInterviewerMode: () => Promise<boolean>
   onSettingsVisibilityChange: (callback: (isVisible: boolean) => void) => () => void
   toggleSettingsWindow: (coords?: { x: number; y: number }) => Promise<void>
   closeSettingsWindow: () => Promise<void>
@@ -383,6 +385,8 @@ export interface ElectronAPI {
   // Meeting Lifecycle
   startMeeting: (metadata?: any) => Promise<{ success: boolean; error?: string }>
   endMeeting: () => Promise<{ success: boolean; error?: string }>
+  beginManualAnswerCapture: () => Promise<{ success: boolean; error?: string }>
+  endManualAnswerCapture: () => Promise<{ success: boolean; error?: string }>
   finalizeMicSTT: () => Promise<void>
   getRecentMeetings: () => Promise<Array<{ id: string; title: string; date: string; duration: string; summary: string }>>
   getMeetingDetails: (id: string) => Promise<any>
@@ -525,7 +529,15 @@ export interface ElectronAPI {
 
   // Profile Engine API
   profileUploadResume: (filePath: string) => Promise<{ success: boolean; error?: string }>
-  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number }>
+  profilePreviewResumeImport: (payload: { filePath: string; projectCount?: number }) => Promise<{ success: boolean; preview?: any; error?: string }>
+  profileApplyResumeImport: (payload: {
+    filePath: string
+    projectCount?: number
+    mappings?: Array<{ previewId: string; projectId?: string | null }>
+    editedProjects?: Array<any>
+    replaceMode: "confirmed_replace"
+  }) => Promise<{ success: boolean; projectCount?: number; identity?: any; projects?: any[]; error?: string }>
+  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number }>
   profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
   profileDelete: () => Promise<{ success: boolean; error?: string }>
   profileGetProfile: () => Promise<any>
@@ -539,8 +551,17 @@ export interface ElectronAPI {
 
   projectLibraryListProjects: () => Promise<any[]>
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
+  projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
+  projectLibraryGetProjectDetail: (projectId: string) => Promise<any>
+  projectLibraryListAssets: (projectId: string) => Promise<any[]>
+  projectLibraryUpdateAssetText: (payload: { assetId: string; rawText: string }) => Promise<{ success: boolean; asset?: any; error?: string }>
+  projectLibraryDeleteAsset: (assetId: string) => Promise<{ success: boolean; error?: string }>
+  projectLibraryListRepos: (projectId: string) => Promise<any[]>
+  projectLibraryReplaceRepo: (payload: { projectId: string; repoRoot: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
+  projectLibraryReindexRepo: (payload: { projectId: string; repoRoot: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
+  projectLibraryDeleteRepo: (payload: { projectId: string; repoRoot: string }) => Promise<{ success: boolean; error?: string }>
   projectLibraryGetProjectFacts: (projectId: string) => Promise<any>
   projectLibrarySetActiveProjects: (projectIds: string[]) => Promise<{ success: boolean; state?: any; error?: string }>
   projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => Promise<{ success: boolean; state?: any; error?: string }>

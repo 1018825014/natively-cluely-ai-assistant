@@ -3,7 +3,7 @@ import packageJson from '../../package.json';
 import {
     X, Mic, Speaker, Monitor, Keyboard, User, LifeBuoy, LogOut, Upload,
     ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Camera, RotateCcw, Eye, Layout, MessageSquare, Crop,
+    Camera, RotateCcw, Eye, Layout, MessageSquare, Crop, Phone,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal
 } from 'lucide-react';
@@ -315,6 +315,112 @@ interface SettingsOverlayProps {
     initialTab?: string;
 }
 
+const RESUME_PROJECT_COUNT_OPTIONS = [1, 2, 3, 4, 5] as const;
+
+type ResumePreviewProjectDraft = {
+    previewId: string;
+    title: string;
+    role: string;
+    summary: string;
+    responsibilities: string;
+    techStack: string;
+    modules: string;
+    metrics: string;
+    highlights: string;
+    keywords: string;
+    sourceExcerpt: string;
+    mappingProjectId: string;
+};
+
+type ResumeImportPreviewDraft = {
+    filePath: string;
+    projectCount: number;
+    createdAt: string;
+    identity: any;
+    skills: string[];
+    projects: ResumePreviewProjectDraft[];
+};
+
+function clampResumeProjectCount(value: number): number {
+    if (!Number.isFinite(value)) return 3;
+    return Math.min(5, Math.max(1, Math.round(value)));
+}
+
+function joinResumeDraftList(values: any): string {
+    return Array.isArray(values) ? values.join('\n') : '';
+}
+
+function parseResumeDraftList(value: string): string[] {
+    return value
+        .split(/\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function normalizeProjectTitleForMapping(value: any): string {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, ' ')
+        .trim();
+}
+
+function pickDefaultMappingProjectId(project: any, existingProjects: any[], usedProjectIds: Set<string>, index: number): string {
+    const normalizedTitle = normalizeProjectTitleForMapping(project?.title);
+
+    const exactMatch = existingProjects.find((existing) => {
+        if (usedProjectIds.has(existing.id)) return false;
+        return normalizeProjectTitleForMapping(existing.title) === normalizedTitle;
+    });
+    if (exactMatch?.id) return exactMatch.id;
+
+    const fuzzyMatch = existingProjects.find((existing) => {
+        if (usedProjectIds.has(existing.id)) return false;
+        const existingTitle = normalizeProjectTitleForMapping(existing.title);
+        if (!normalizedTitle || !existingTitle) return false;
+        return existingTitle.includes(normalizedTitle) || normalizedTitle.includes(existingTitle);
+    });
+    if (fuzzyMatch?.id) return fuzzyMatch.id;
+
+    const sameIndexProject = existingProjects[index];
+    if (sameIndexProject?.id && !usedProjectIds.has(sameIndexProject.id)) {
+        return sameIndexProject.id;
+    }
+
+    return '';
+}
+
+function buildResumeImportPreviewDraft(preview: any, existingProjects: any[]): ResumeImportPreviewDraft {
+    const usedProjectIds = new Set<string>();
+    const projects = Array.isArray(preview?.projects) ? preview.projects : [];
+
+    return {
+        filePath: preview?.filePath || '',
+        projectCount: clampResumeProjectCount(preview?.projectCount || 3),
+        createdAt: preview?.createdAt || '',
+        identity: preview?.identity || {},
+        skills: Array.isArray(preview?.skills) ? preview.skills : [],
+        projects: projects.map((project: any, index: number) => {
+            const mappingProjectId = pickDefaultMappingProjectId(project, existingProjects, usedProjectIds, index);
+            if (mappingProjectId) usedProjectIds.add(mappingProjectId);
+
+            return {
+                previewId: String(project?.previewId || `preview-${index + 1}`),
+                title: String(project?.title || '').trim(),
+                role: String(project?.role || '').trim(),
+                summary: String(project?.summary || '').trim(),
+                responsibilities: joinResumeDraftList(project?.responsibilities),
+                techStack: joinResumeDraftList(project?.techStack),
+                modules: joinResumeDraftList(project?.modules),
+                metrics: joinResumeDraftList(project?.metrics),
+                highlights: joinResumeDraftList(project?.highlights),
+                keywords: joinResumeDraftList(project?.keywords),
+                sourceExcerpt: String(project?.sourceExcerpt || '').trim(),
+                mappingProjectId,
+            };
+        }),
+    };
+}
+
 const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
     const [activeTab, setActiveTab] = useState(initialTab);
     
@@ -325,8 +431,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             
             // Proactively load profile data if starting on profile tab
             if (initialTab === 'profile') {
-                window.electronAPI?.profileGetStatus?.().then(setProfileStatus).catch(() => { });
-                window.electronAPI?.profileGetProfile?.().then(setProfileData).catch(() => { });
+                refreshProfileKnowledge().catch(() => { });
             }
         }
     }, [isOpen, initialTab]);
@@ -349,10 +454,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         name?: string;
         role?: string;
         totalExperienceYears?: number;
+        preferredResumeProjectCount?: number;
     }>({ hasProfile: false, profileMode: false });
     const [profileUploading, setProfileUploading] = useState(false);
+    const [profileApplying, setProfileApplying] = useState(false);
     const [profileError, setProfileError] = useState('');
     const [profileData, setProfileData] = useState<any>(null);
+    const [resumeProjectCount, setResumeProjectCount] = useState(3);
+    const [resumeImportFilePath, setResumeImportFilePath] = useState('');
+    const [resumeImportPreview, setResumeImportPreview] = useState<ResumeImportPreviewDraft | null>(null);
     const [isPremiumModalOpen, setIsPremiumModalOpen] = useState(false);
     const [isPremium, setIsPremium] = useState(false);
     const [jdUploading, setJdUploading] = useState(false);
@@ -364,6 +474,133 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [hasStoredGoogleSearchKey, setHasStoredGoogleSearchKey] = useState(false);
     const [hasStoredGoogleSearchCseId, setHasStoredGoogleSearchCseId] = useState(false);
     const [googleSearchSaving, setGoogleSearchSaving] = useState(false);
+    const existingKnowledgeProjects = Array.isArray(profileData?.projects) ? profileData.projects : [];
+    const resumePreviewNeedsRefresh = Boolean(
+        resumeImportPreview &&
+        resumeImportFilePath &&
+        resumeImportPreview.projectCount !== resumeProjectCount
+    );
+
+    const clearResumeImportPreview = () => {
+        setResumeImportPreview(null);
+        setResumeImportFilePath('');
+    };
+
+    const refreshProfileKnowledge = async () => {
+        const [status, data] = await Promise.all([
+            window.electronAPI?.profileGetStatus?.(),
+            window.electronAPI?.profileGetProfile?.(),
+        ]);
+
+        if (status) {
+            setProfileStatus(status);
+        }
+
+        setProfileData(data || null);
+
+        if (!resumeImportPreview) {
+            setResumeProjectCount(
+                clampResumeProjectCount(
+                    Number(data?.preferredResumeProjectCount || status?.preferredResumeProjectCount || 3)
+                )
+            );
+        }
+    };
+
+    const runResumeImportPreview = async (filePath: string) => {
+        if (!filePath) return;
+        setProfileError('');
+        setProfileUploading(true);
+        try {
+            const result = await window.electronAPI?.profilePreviewResumeImport?.({
+                filePath,
+                projectCount: resumeProjectCount,
+            });
+
+            if (result?.success && result.preview) {
+                setResumeImportFilePath(filePath);
+                setResumeImportPreview(buildResumeImportPreviewDraft(result.preview, existingKnowledgeProjects));
+            } else {
+                setProfileError(result?.error || 'Preview failed');
+            }
+        } catch (e: any) {
+            setProfileError(e.message || 'Preview failed');
+        } finally {
+            setProfileUploading(false);
+        }
+    };
+
+    const selectAndPreviewResume = async () => {
+        setProfileError('');
+        const fileResult = await window.electronAPI?.profileSelectFile?.();
+        if (fileResult?.cancelled || !fileResult?.filePath) return;
+        await runResumeImportPreview(fileResult.filePath);
+    };
+
+    const updateResumePreviewProject = (previewId: string, patch: Partial<ResumePreviewProjectDraft>) => {
+        setResumeImportPreview((current) => {
+            if (!current) return current;
+            return {
+                ...current,
+                projects: current.projects.map((project) =>
+                    project.previewId === previewId ? { ...project, ...patch } : project
+                ),
+            };
+        });
+    };
+
+    const applyResumeImportPreview = async () => {
+        if (!resumeImportPreview || !resumeImportFilePath) return;
+        if (resumePreviewNeedsRefresh) {
+            setProfileError('Refresh the preview after changing the project count.');
+            return;
+        }
+
+        const mappedProjectIds = resumeImportPreview.projects
+            .map((project) => project.mappingProjectId)
+            .filter(Boolean);
+        if (new Set(mappedProjectIds).size !== mappedProjectIds.length) {
+            setProfileError('Each existing project can only be mapped once.');
+            return;
+        }
+
+        setProfileError('');
+        setProfileApplying(true);
+        try {
+            const result = await window.electronAPI?.profileApplyResumeImport?.({
+                filePath: resumeImportFilePath,
+                projectCount: resumeProjectCount,
+                mappings: resumeImportPreview.projects.map((project) => ({
+                    previewId: project.previewId,
+                    projectId: project.mappingProjectId || null,
+                })),
+                editedProjects: resumeImportPreview.projects.map((project) => ({
+                    previewId: project.previewId,
+                    title: project.title.trim(),
+                    role: project.role.trim(),
+                    summary: project.summary.trim(),
+                    responsibilities: parseResumeDraftList(project.responsibilities),
+                    techStack: parseResumeDraftList(project.techStack),
+                    modules: parseResumeDraftList(project.modules),
+                    metrics: parseResumeDraftList(project.metrics),
+                    highlights: parseResumeDraftList(project.highlights),
+                    keywords: parseResumeDraftList(project.keywords),
+                })),
+                replaceMode: 'confirmed_replace',
+            });
+
+            if (result?.success) {
+                clearResumeImportPreview();
+                await refreshProfileKnowledge();
+            } else {
+                setProfileError(result?.error || 'Import failed');
+            }
+        } catch (e: any) {
+            setProfileError(e.message || 'Import failed');
+        } finally {
+            setProfileApplying(false);
+        }
+    };
 
     // Close dropdown when clicking outside
     // Sync with global state changes
@@ -376,6 +613,14 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             window.electronAPI?.getDisguise?.().then(setDisguiseMode).catch(() => { });
         }
     }, [isOpen]);
+
+    useEffect(() => {
+        if (!resumeImportPreview) {
+            setResumeProjectCount(
+                clampResumeProjectCount(Number(profileData?.preferredResumeProjectCount || 3))
+            );
+        }
+    }, [profileData?.preferredResumeProjectCount, resumeImportPreview]);
 
     useEffect(() => {
         if (window.electronAPI?.onUndetectableChanged) {
@@ -673,6 +918,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [selectedInput, setSelectedInput] = useState('');
     const [selectedOutput, setSelectedOutput] = useState('');
     const [micLevel, setMicLevel] = useState(0);
+    const [phoneInterviewerMode, setPhoneInterviewerMode] = useState(false);
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
 
     // STT Provider settings
@@ -706,6 +952,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [glossarySaving, setGlossarySaving] = useState(false);
     const [glossarySaved, setGlossarySaved] = useState(false);
     const [glossarySaveMessage, setGlossarySaveMessage] = useState('');
+    const [glossarySaveTone, setGlossarySaveTone] = useState<'success' | 'warning' | 'error'>('success');
     const [sttCompareResults, setSttCompareResults] = useState<any>(null);
     const [sttCompareBusy, setSttCompareBusy] = useState<'idle' | 'starting' | 'stopping' | 'exporting'>('idle');
     const [sttCompareExportMessage, setSttCompareExportMessage] = useState('');
@@ -969,6 +1216,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const handleSaveTechnicalGlossary = async () => {
         setGlossarySaving(true);
         setGlossarySaveMessage('');
+        setGlossarySaveTone('success');
         try {
             const entries = technicalGlossaryText
                 .split(/\r?\n/)
@@ -990,6 +1238,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             });
 
             if (!result?.success) {
+                setGlossarySaveTone('error');
                 setGlossarySaveMessage(result?.error || '保存热词表失败');
                 return;
             }
@@ -998,11 +1247,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 setAlibabaVocabularyId(result.config.alibabaVocabularyId);
             }
 
+            setGlossarySaveTone(result?.warning ? 'warning' : 'success');
             setGlossarySaveMessage(result?.warning || '已保存，热词更新会从下一句开始生效。');
             setGlossarySaved(true);
             setTimeout(() => setGlossarySaved(false), 2000);
         } catch (error) {
             console.error('Failed to save technical glossary:', error);
+            setGlossarySaveTone('error');
             setGlossarySaveMessage(error instanceof Error ? error.message : '保存热词表失败');
         } finally {
             setGlossarySaving(false);
@@ -1119,6 +1370,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             }
             if (window.electronAPI?.getThemeMode) {
                 window.electronAPI.getThemeMode().then(({ mode }) => setThemeMode(mode));
+            }
+            if (window.electronAPI?.getPhoneInterviewerMode) {
+                window.electronAPI.getPhoneInterviewerMode().then(setPhoneInterviewerMode).catch(() => { });
             }
 
             // Load settings
@@ -1464,9 +1718,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                     <button
                                         onClick={() => {
                                             setActiveTab('profile');
-                                            // Load profile status when switching to this tab
-                                            window.electronAPI?.profileGetStatus?.().then(setProfileStatus).catch(() => { });
-                                            window.electronAPI?.profileGetProfile?.().then(setProfileData).catch(() => { });
+                                            refreshProfileKnowledge().catch(() => { });
                                         }}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'profile' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
                                     >
@@ -1885,8 +2137,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     if (!confirm('Are you sure you want to delete your mapped persona? This will destroy all structured timeline data.')) return;
                                                                     try {
                                                                         await window.electronAPI?.profileDelete?.();
-                                                                        setProfileStatus({ hasProfile: false, profileMode: false });
-                                                                        setProfileData(null);
+                                                                        clearResumeImportPreview();
+                                                                        await refreshProfileKnowledge();
                                                                     } catch (e) { console.error('Failed to delete profile:', e); }
                                                                 }}
                                                                 className="text-[12px] font-medium text-text-tertiary hover:text-red-500 transition-colors px-3 py-1.5 rounded-full hover:bg-red-500/10"
@@ -1970,17 +2222,17 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                     {/* Upload Area */}
                                     <div className="mt-5">
-                                        <div className={`bg-bg-item-surface rounded-xl border transition-all ${profileUploading ? 'border-accent-primary/50 ring-1 ring-accent-primary/20' : 'border-border-subtle'}`}>
+                                        <div className={`bg-bg-item-surface rounded-xl border transition-all ${(profileUploading || profileApplying) ? 'border-accent-primary/50 ring-1 ring-accent-primary/20' : 'border-border-subtle'}`}>
                                             <div className="p-5 flex items-center justify-between">
                                                 <div className="flex items-center gap-4 min-w-0">
                                                     <div className="w-10 h-10 rounded-lg bg-bg-input border border-border-subtle flex items-center justify-center text-text-tertiary shrink-0">
-                                                        {profileUploading ? <RefreshCw size={20} className="animate-spin text-accent-primary" /> : <Upload size={20} />}
+                                                        {(profileUploading || profileApplying) ? <RefreshCw size={20} className="animate-spin text-accent-primary" /> : <Upload size={20} />}
                                                     </div>
                                                     <div className="min-w-0">
                                                         <h4 className="text-sm font-bold text-text-primary mb-0.5 truncate pr-4">
-                                                            {profileStatus.hasProfile ? 'Overwrite Source Document' : 'Initialize Knowledge Base'}
+                                                            {profileStatus.hasProfile ? 'Preview Resume Re-import' : 'Initialize Knowledge Base'}
                                                         </h4>
-                                                        {profileUploading ? (
+                                                        {(profileUploading || profileApplying) ? (
                                                             <div className="flex items-center gap-2">
                                                                 <div className="h-[4px] w-[100px] bg-bg-input rounded-full overflow-hidden">
                                                                     <div className="h-full bg-accent-primary rounded-full animate-pulse" style={{ width: '50%' }} />
@@ -1989,39 +2241,18 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             </div>
                                                         ) : (
                                                             <p className="text-xs text-text-secondary truncate pr-4">
-                                                                Upload a resume to seed 2 to 3 interview projects.
+                                                                Select a resume, preview the extracted projects, then confirm the replacement.
                                                             </p>
                                                         )}
                                                     </div>
                                                 </div>
 
                                                 <button
-                                                    onClick={async () => {
-                                                        setProfileError('');
-                                                        try {
-                                                            const fileResult = await window.electronAPI?.profileSelectFile?.();
-                                                            if (fileResult?.cancelled || !fileResult?.filePath) return;
-
-                                                            setProfileUploading(true);
-                                                            const result = await window.electronAPI?.profileUploadResume?.(fileResult.filePath);
-                                                            if (result?.success) {
-                                                                const status = await window.electronAPI?.profileGetStatus?.();
-                                                                if (status) setProfileStatus(status);
-                                                                const data = await window.electronAPI?.profileGetProfile?.();
-                                                                if (data) setProfileData(data);
-                                                            } else {
-                                                                setProfileError(result?.error || 'Upload failed');
-                                                            }
-                                                        } catch (e: any) {
-                                                            setProfileError(e.message || 'Upload failed');
-                                                        } finally {
-                                                            setProfileUploading(false);
-                                                        }
-                                                    }}
-                                                    disabled={profileUploading}
-                                                    className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 ${profileUploading ? 'bg-bg-input text-text-tertiary cursor-wait border border-border-subtle' : 'bg-text-primary text-bg-main hover:opacity-90 shadow-sm'}`}
+                                                    onClick={() => selectAndPreviewResume()}
+                                                    disabled={profileUploading || profileApplying}
+                                                    className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 ${(profileUploading || profileApplying) ? 'bg-bg-input text-text-tertiary cursor-wait border border-border-subtle' : 'bg-text-primary text-bg-main hover:opacity-90 shadow-sm'}`}
                                                 >
-                                                    {profileUploading ? 'Ingesting...' : 'Select File'}
+                                                    {profileUploading ? 'Previewing...' : 'Select File'}
                                                 </button>
                                             </div>
 
@@ -2033,6 +2264,247 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 </div>
                                             )}
                                         </div>
+                                    </div>
+
+                                    <div className="mt-3 bg-bg-item-surface rounded-xl border border-border-subtle p-5 space-y-5">
+                                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                            <div>
+                                                <h4 className="text-sm font-bold text-text-primary">Resume Import Controls</h4>
+                                                <p className="text-xs text-text-secondary mt-1">
+                                                    Set the exact project count before previewing. Re-import only writes to the local knowledge base after you confirm the preview below.
+                                                </p>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2">
+                                                {resumeImportFilePath && (
+                                                    <button
+                                                        onClick={() => runResumeImportPreview(resumeImportFilePath)}
+                                                        disabled={profileUploading || profileApplying}
+                                                        className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap border ${resumePreviewNeedsRefresh ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary'}`}
+                                                    >
+                                                        {resumePreviewNeedsRefresh ? 'Refresh Preview' : 'Run Preview Again'}
+                                                    </button>
+                                                )}
+                                                {resumeImportPreview && (
+                                                    <button
+                                                        onClick={() => applyResumeImportPreview()}
+                                                        disabled={profileUploading || profileApplying || resumePreviewNeedsRefresh}
+                                                        className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap ${(profileUploading || profileApplying || resumePreviewNeedsRefresh) ? 'bg-bg-input text-text-tertiary cursor-not-allowed border border-border-subtle' : 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-sm'}`}
+                                                    >
+                                                        {profileApplying ? 'Applying...' : 'Confirm Replace'}
+                                                    </button>
+                                                )}
+                                                {resumeImportPreview && (
+                                                    <button
+                                                        onClick={() => {
+                                                            setProfileError('');
+                                                            clearResumeImportPreview();
+                                                        }}
+                                                        disabled={profileUploading || profileApplying}
+                                                        className="px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary"
+                                                    >
+                                                        Cancel Preview
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div className="text-[10px] font-bold text-text-primary uppercase tracking-wide mb-2">
+                                                Target Project Count
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {RESUME_PROJECT_COUNT_OPTIONS.map((count) => (
+                                                    <button
+                                                        key={count}
+                                                        onClick={() => setResumeProjectCount(count)}
+                                                        disabled={profileUploading || profileApplying}
+                                                        className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${resumeProjectCount === count ? 'bg-text-primary text-bg-main' : 'bg-bg-input border border-border-subtle text-text-secondary hover:text-text-primary'}`}
+                                                    >
+                                                        {count} {count === 1 ? 'Project' : 'Projects'}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-lg border border-border-subtle bg-bg-input px-3 py-3 space-y-2">
+                                            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                                <span className="font-semibold text-text-primary">Selected Resume</span>
+                                                {resumeImportFilePath ? (
+                                                    <span className="text-text-secondary break-all">{resumeImportFilePath}</span>
+                                                ) : (
+                                                    <span className="text-text-tertiary">No file selected yet.</span>
+                                                )}
+                                            </div>
+                                            <div className="text-[11px] text-text-secondary leading-relaxed">
+                                                Mapping a preview project onto an existing project keeps that project&apos;s ID, manual attachments, and repo index. Only the resume excerpt is replaced.
+                                            </div>
+                                            {resumePreviewNeedsRefresh && (
+                                                <div className="text-[11px] text-amber-500">
+                                                    The target project count changed after the last preview. Run the preview again before confirming the import.
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {resumeImportPreview && (
+                                            <div className="space-y-4">
+                                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                                    <div>
+                                                        <h4 className="text-sm font-bold text-text-primary">Resume Import Preview</h4>
+                                                        <p className="text-xs text-text-secondary mt-1">
+                                                            Edit anything that looks wrong, then choose whether each preview project should update an existing project or create a new one.
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-[11px] text-text-secondary">
+                                                        {resumeImportPreview.createdAt ? `Preview created ${new Date(resumeImportPreview.createdAt).toLocaleString()}` : `${resumeImportPreview.projects.length} projects ready`}
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid md:grid-cols-2 gap-3">
+                                                    <div className="rounded-lg border border-border-subtle bg-bg-input px-4 py-3">
+                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Identity</div>
+                                                        <div className="text-sm font-semibold text-text-primary mt-1">
+                                                            {resumeImportPreview.identity?.name || 'Unnamed Candidate'}
+                                                        </div>
+                                                        <div className="text-[11px] text-text-secondary mt-1">
+                                                            {resumeImportPreview.identity?.role || 'Role not detected'}
+                                                        </div>
+                                                        {resumeImportPreview.identity?.summary && (
+                                                            <p className="text-[11px] text-text-secondary mt-2 leading-relaxed">
+                                                                {resumeImportPreview.identity.summary}
+                                                            </p>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="rounded-lg border border-border-subtle bg-bg-input px-4 py-3">
+                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">Skills</div>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {(resumeImportPreview.skills || []).slice(0, 18).map((skill: string) => (
+                                                                <span key={skill} className="text-[10px] font-medium text-text-secondary px-2 py-1 rounded-md border border-border-subtle bg-bg-item-surface">
+                                                                    {skill}
+                                                                </span>
+                                                            ))}
+                                                            {(!resumeImportPreview.skills || resumeImportPreview.skills.length === 0) && (
+                                                                <span className="text-[11px] text-text-tertiary">No skills detected from this preview.</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="space-y-4">
+                                                    {resumeImportPreview.projects.map((project, index) => (
+                                                        <div key={project.previewId} className="rounded-xl border border-border-subtle bg-bg-input px-4 py-4 space-y-4">
+                                                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                                                <div>
+                                                                    <div className="text-[10px] uppercase tracking-wide text-text-tertiary">
+                                                                        Preview Project {index + 1}
+                                                                    </div>
+                                                                    <div className="text-sm font-semibold text-text-primary mt-1">
+                                                                        {project.title || `Project ${index + 1}`}
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="w-full max-w-[320px]">
+                                                                    <label className="text-[10px] uppercase tracking-wide text-text-tertiary block mb-1.5">
+                                                                        Apply To
+                                                                    </label>
+                                                                    <select
+                                                                        value={project.mappingProjectId}
+                                                                        onChange={(event) => updateResumePreviewProject(project.previewId, { mappingProjectId: event.target.value })}
+                                                                        className="w-full bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
+                                                                    >
+                                                                        <option value="">Create New Project</option>
+                                                                        {existingKnowledgeProjects.map((existingProject: any) => (
+                                                                            <option key={existingProject.id} value={existingProject.id}>
+                                                                                {existingProject.title}
+                                                                            </option>
+                                                                        ))}
+                                                                    </select>
+                                                                    <div className="text-[10px] text-text-tertiary mt-1.5">
+                                                                        {project.mappingProjectId
+                                                                            ? 'This keeps the current project ID, manual assets, and repo attachments.'
+                                                                            : 'This creates a brand new project card in the local library.'}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid md:grid-cols-2 gap-3">
+                                                                <input
+                                                                    value={project.title}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { title: event.target.value })}
+                                                                    placeholder="Project title"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
+                                                                />
+                                                                <input
+                                                                    value={project.role}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { role: event.target.value })}
+                                                                    placeholder="Role"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
+                                                                />
+                                                                <textarea
+                                                                    value={project.summary}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { summary: event.target.value })}
+                                                                    rows={3}
+                                                                    placeholder="Summary"
+                                                                    className="md:col-span-2 bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.responsibilities}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { responsibilities: event.target.value })}
+                                                                    rows={4}
+                                                                    placeholder="Responsibilities, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.techStack}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { techStack: event.target.value })}
+                                                                    rows={4}
+                                                                    placeholder="Tech stack, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.modules}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { modules: event.target.value })}
+                                                                    rows={3}
+                                                                    placeholder="Modules, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.metrics}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { metrics: event.target.value })}
+                                                                    rows={3}
+                                                                    placeholder="Metrics, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.highlights}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { highlights: event.target.value })}
+                                                                    rows={3}
+                                                                    placeholder="Highlights, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                                <textarea
+                                                                    value={project.keywords}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { keywords: event.target.value })}
+                                                                    rows={3}
+                                                                    placeholder="Keywords, one per line"
+                                                                    className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                            </div>
+
+                                                            {project.sourceExcerpt && (
+                                                                <div className="rounded-lg border border-border-subtle bg-bg-item-surface px-3 py-3">
+                                                                    <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">Resume Excerpt</div>
+                                                                    <p className="text-[11px] text-text-secondary leading-relaxed whitespace-pre-wrap">
+                                                                        {project.sourceExcerpt}
+                                                                    </p>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* JD Upload Card */}
@@ -2332,7 +2804,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             </div>
                                         </div>
                                     )}
-                                    <ProfileVisualizer profileData={profileData} />
+                                    <ProfileVisualizer profileData={profileData} onProfileDataChange={setProfileData} />
 
 
                                 </div>
@@ -2816,9 +3288,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     OpenAI 实时转写会把这份热词表当作提示词使用。阿里云 Paraformer 和 Fun-ASR 会基于同一份热词源数据同步各自模型专属的热词表。
                                                 </p>
                                                 {glossarySaveMessage && (
-                                                    <div className={`rounded-lg border px-3 py-2 text-xs ${glossarySaveMessage.includes('失败') || glossarySaveMessage.toLowerCase().includes('failed') || glossarySaveMessage.toLowerCase().includes('error')
+                                                    <div className={`rounded-lg border px-3 py-2 text-xs ${glossarySaveTone === 'error'
                                                         ? 'border-red-500/20 bg-red-500/10 text-red-300'
-                                                        : 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200'
+                                                        : glossarySaveTone === 'warning'
+                                                            ? 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+                                                            : 'border-cyan-500/20 bg-cyan-500/10 text-cyan-200'
                                                         }`}>
                                                         {glossarySaveMessage}
                                                     </div>
@@ -2990,6 +3464,38 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         className="h-full bg-green-500 transition-all duration-100 ease-out"
                                                         style={{ width: `${micLevel}%` }}
                                                     />
+                                                </div>
+                                            </div>
+
+                                            <div className="rounded-xl border border-border-subtle bg-bg-item-surface px-4 py-4">
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <Phone size={16} className="text-text-primary" />
+                                                            <h4 className="text-sm font-semibold text-text-primary">电话外放面试模式</h4>
+                                                        </div>
+                                                        <p className="mt-2 text-xs leading-5 text-text-secondary">
+                                                            打开后，麦克风默认按面试官输入处理，系统音频不再参与面试官转写。
+                                                            只有主动点“回答”开始录音时，麦克风才会临时切回候选人输入。
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={async () => {
+                                                            const nextState = !phoneInterviewerMode;
+                                                            setPhoneInterviewerMode(nextState);
+
+                                                            try {
+                                                                await window.electronAPI?.setPhoneInterviewerMode?.(nextState);
+                                                            } catch (error) {
+                                                                console.error('Failed to toggle phone interviewer mode:', error);
+                                                                setPhoneInterviewerMode(!nextState);
+                                                            }
+                                                        }}
+                                                        className={`w-11 h-6 rounded-full relative transition-colors shrink-0 ${phoneInterviewerMode ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+                                                    >
+                                                        <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${phoneInterviewerMode ? 'translate-x-5' : 'translate-x-0'}`} />
+                                                    </button>
                                                 </div>
                                             </div>
 

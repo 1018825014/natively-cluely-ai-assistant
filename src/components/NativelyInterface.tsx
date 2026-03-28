@@ -615,6 +615,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [meetingGlossarySaving, setMeetingGlossarySaving] = useState(false);
     const [meetingGlossarySaved, setMeetingGlossarySaved] = useState(false);
     const [meetingGlossaryMessage, setMeetingGlossaryMessage] = useState('');
+    const [meetingGlossaryMessageTone, setMeetingGlossaryMessageTone] = useState<'success' | 'warning' | 'error'>('success');
     const [conversationContext, setConversationContext] = useState<string>('');
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
@@ -691,6 +692,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const openFunAsrComparePanel = async () => {
         setIsFunAsrCompareOpen(true);
         setMeetingGlossaryMessage('');
+        setMeetingGlossaryMessageTone('success');
         await Promise.all([
             refreshSttCompareResults(),
             refreshMeetingGlossary(),
@@ -719,12 +721,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         setMeetingGlossarySaving(true);
         setMeetingGlossaryMessage('');
+        setMeetingGlossaryMessageTone('success');
 
         try {
             const nextConfig = parseGlossaryText(meetingGlossaryText, meetingGlossaryConfig);
             const result = await window.electronAPI.setTechnicalGlossary(nextConfig);
 
             if (!result?.success) {
+                setMeetingGlossaryMessageTone('error');
                 setMeetingGlossaryMessage(result?.error || '保存热词表失败。');
                 return;
             }
@@ -733,11 +737,18 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMeetingGlossaryConfig(savedConfig);
             setMeetingGlossaryText(formatGlossaryText(savedConfig));
             setMeetingGlossarySaved(true);
-            setMeetingGlossaryMessage(result.warning || '热词表已保存，新热词会从下一句开始生效。');
+            if (result.warning) {
+                setMeetingGlossaryMessageTone('warning');
+                setMeetingGlossaryMessage(result.warning);
+            } else {
+                setMeetingGlossaryMessageTone('success');
+                setMeetingGlossaryMessage('热词表已保存，新热词会从下一句开始生效。');
+            }
             setTimeout(() => setMeetingGlossarySaved(false), 1800);
             await refreshSttCompareResults();
         } catch (error) {
             console.error('[NativelyInterface] Failed to save meeting glossary:', error);
+            setMeetingGlossaryMessageTone('error');
             setMeetingGlossaryMessage(error instanceof Error ? error.message : '保存热词表失败。');
         } finally {
             setMeetingGlossarySaving(false);
@@ -1915,6 +1926,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setIsFunAsrCompareOpen(false);
             setSttCompareResults(null);
             setMeetingGlossaryMessage('');
+            setMeetingGlossaryMessageTone('success');
             transcriptDraftsRef.current = {};
             setTranscriptDrafts({});
             setTranscriptSaveStates({});
@@ -2643,33 +2655,42 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             const recordingStartedAt = manualRecordingStartAtRef.current;
             manualRecordingStartAtRef.current = null;
 
-            // Send manual finalization signal to STT Providers
-            await window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
+            // End manual answer capture: finalize user STT and restore the default mic route
+            if (window.electronAPI?.endManualAnswerCapture) {
+                await window.electronAPI.endManualAnswerCapture().catch(err => console.error('[NativelyInterface] Failed to end manual answer capture:', err));
+            } else {
+                await window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
+            }
 
             const currentAttachments = attachedContext;
             setAttachedContext([]);
 
-            let transcriptState = liveTranscriptSegments;
+            let transcriptState = liveTranscriptSegmentsRef.current.length > 0
+                ? liveTranscriptSegmentsRef.current
+                : liveTranscriptSegments;
             try {
-                const committed = await window.electronAPI?.commitLiveTranscriptSegment?.({ speaker: 'user' });
-                if (committed?.state) {
-                    transcriptState = committed.state;
-                    setLiveTranscriptSegments(committed.state);
-                } else if (window.electronAPI?.getLiveTranscriptState) {
-                    transcriptState = await window.electronAPI.getLiveTranscriptState();
+                if (window.electronAPI?.getLiveTranscriptState) {
+                    const nextTranscriptState = await window.electronAPI.getLiveTranscriptState();
+                    if (nextTranscriptState?.length) {
+                        transcriptState = nextTranscriptState;
+                    }
                     setLiveTranscriptSegments(transcriptState);
                 }
             } catch (error) {
-                console.error('[NativelyInterface] Failed to commit user live transcript:', error);
+                console.error('[NativelyInterface] Failed to refresh user live transcript state:', error);
             }
 
-            const question = transcriptState
+            const transcriptQuestion = transcriptState
                 .filter(segment => segment.speaker === 'user')
                 .filter(segment => recordingStartedAt === null || (segment.updatedAt || segment.timestamp) >= recordingStartedAt - 250)
                 .map(segment => segment.text.trim())
                 .filter(Boolean)
                 .join(' ')
-                .trim() || latestUserTranscriptSnapshotRef.current;
+                .trim();
+            const question = chooseMoreCompleteTranscript(
+                transcriptQuestion,
+                latestUserTranscriptSnapshotRef.current
+            ).trim();
 
             latestUserTranscriptSnapshotRef.current = '';
 
@@ -2756,6 +2777,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             }
         } else {
             // Start recording and mark a new candidate-answer capture window
+            try {
+                const committed = await window.electronAPI?.commitLiveTranscriptSegment?.({ speaker: 'user' });
+                if (committed?.state) {
+                    setLiveTranscriptSegments(committed.state);
+                }
+            } catch (error) {
+                console.warn('[NativelyInterface] Failed to finalize previous user live transcript before recording:', error);
+            }
+
+            try {
+                await window.electronAPI?.beginManualAnswerCapture?.();
+            } catch (error) {
+                console.warn('[NativelyInterface] Failed to begin manual answer capture:', error);
+            }
+
             latestUserTranscriptSnapshotRef.current = '';
             manualRecordingStartAtRef.current = Date.now();
             isRecordingRef.current = true;
@@ -3543,7 +3579,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                                     placeholder={'agent | 5\ntool calling | 5\nMCP | 5\nRAG | 5'}
                                 />
                                 {meetingGlossaryMessage && (
-                                    <div className={`mt-2 rounded-[12px] border px-3 py-2 text-xs leading-5 ${meetingGlossaryMessage.toLowerCase().includes('failed') || meetingGlossaryMessage.toLowerCase().includes('error') ? 'border-red-400/20 bg-red-500/10 text-red-200' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
+                                    <div className={`mt-2 rounded-[12px] border px-3 py-2 text-xs leading-5 ${meetingGlossaryMessageTone === 'error'
+                                        ? 'border-red-400/20 bg-red-500/10 text-red-200'
+                                        : meetingGlossaryMessageTone === 'warning'
+                                            ? 'border-amber-400/25 bg-amber-500/10 text-amber-100'
+                                            : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
                                         {meetingGlossaryMessage}
                                     </div>
                                 )}

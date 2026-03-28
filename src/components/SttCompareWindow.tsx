@@ -134,6 +134,7 @@ export default function SttCompareWindow() {
     const [glossarySaving, setGlossarySaving] = useState(false);
     const [glossarySaved, setGlossarySaved] = useState(false);
     const [statusMessage, setStatusMessage] = useState("");
+    const [statusTone, setStatusTone] = useState<"success" | "warning" | "error">("success");
     const autoStartedRef = useRef(false);
 
     const refreshCompareResults = async () => {
@@ -250,12 +251,14 @@ export default function SttCompareWindow() {
 
         setGlossarySaving(true);
         setStatusMessage("");
+        setStatusTone("success");
 
         try {
             const nextConfig = parseGlossaryText(glossaryText, glossaryConfig);
             const result = await window.electronAPI.setTechnicalGlossary(nextConfig);
 
             if (!result?.success) {
+                setStatusTone("error");
                 setStatusMessage(result?.error || "保存热词表失败");
                 return;
             }
@@ -264,11 +267,13 @@ export default function SttCompareWindow() {
             setGlossaryConfig(savedConfig);
             setGlossaryText(formatGlossaryText(savedConfig));
             setGlossarySaved(true);
+            setStatusTone(result.warning ? "warning" : "success");
             setStatusMessage(result.warning || "热词表已保存，新热词会从下一句开始生效。");
             window.setTimeout(() => setGlossarySaved(false), 1500);
             await refreshCompareResults();
         } catch (error) {
             console.error("[SttCompareWindow] 保存热词表失败:", error);
+            setStatusTone("error");
             setStatusMessage(error instanceof Error ? error.message : "保存热词表失败");
         } finally {
             setGlossarySaving(false);
@@ -279,12 +284,14 @@ export default function SttCompareWindow() {
         if (!window.electronAPI?.startSttCompareSession) return;
         setCompareBusy("starting");
         setStatusMessage("");
+        setStatusTone("success");
         try {
             await window.electronAPI.startSttCompareSession();
             autoStartedRef.current = false;
             await refreshCompareResults();
         } catch (error) {
             console.error("[SttCompareWindow] 启动对比失败:", error);
+            setStatusTone("error");
             setStatusMessage(error instanceof Error ? error.message : "启动对比失败");
         } finally {
             setCompareBusy("idle");
@@ -300,6 +307,7 @@ export default function SttCompareWindow() {
             await refreshCompareResults();
         } catch (error) {
             console.error("[SttCompareWindow] 停止对比失败:", error);
+            setStatusTone("error");
             setStatusMessage(error instanceof Error ? error.message : "停止对比失败");
         } finally {
             setCompareBusy("idle");
@@ -312,12 +320,15 @@ export default function SttCompareWindow() {
         try {
             const result = await window.electronAPI.exportSttBenchmarkReport();
             if (result?.success) {
+                setStatusTone("success");
                 setStatusMessage(`报告已导出：${result.markdownPath || result.jsonPath}`);
             } else {
+                setStatusTone("error");
                 setStatusMessage(result?.error || "导出报告失败");
             }
         } catch (error) {
             console.error("[SttCompareWindow] 导出报告失败:", error);
+            setStatusTone("error");
             setStatusMessage(error instanceof Error ? error.message : "导出报告失败");
         } finally {
             setCompareBusy("idle");
@@ -490,9 +501,11 @@ export default function SttCompareWindow() {
                             </section>
 
                             {statusMessage && (
-                                <div className={`rounded-[18px] border px-4 py-3 text-sm leading-6 ${statusMessage.includes("失败") || statusMessage.toLowerCase().includes("error")
+                                <div className={`rounded-[18px] border px-4 py-3 text-sm leading-6 ${statusTone === "error"
                                     ? "border-red-400/20 bg-red-500/10 text-red-200"
-                                    : "border-cyan-400/20 bg-cyan-500/10 text-cyan-100"}`}>
+                                    : statusTone === "warning"
+                                        ? "border-amber-400/25 bg-amber-500/10 text-amber-100"
+                                        : "border-cyan-400/20 bg-cyan-500/10 text-cyan-100"}`}>
                                     {statusMessage}
                                 </div>
                             )}

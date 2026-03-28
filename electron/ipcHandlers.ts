@@ -793,6 +793,16 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.finalizeMicSTT();
   });
 
+  safeHandle("begin-manual-answer-capture", async () => {
+    appState.beginManualAnswerCapture();
+    return { success: true };
+  });
+
+  safeHandle("end-manual-answer-capture", async () => {
+    appState.endManualAnswerCapture();
+    return { success: true };
+  });
+
   // IPC handler for analyzing image from file path
   safeHandle("analyze-image-file", async (event, filePath: string, traceContext?: TraceActionContext) => {
     return llmTraceRecorder.runWithAction(
@@ -963,14 +973,13 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
 
-
-  safeHandle("quit-app", () => {
-    app.quit()
+  safeHandle("quit-app", async () => {
+    await appState.quitGracefully()
   })
 
-  safeHandle("quit-and-install-update", () => {
+  safeHandle("quit-and-install-update", async () => {
     console.log('[IPC] quit-and-install-update handler called')
-    appState.quitAndInstallUpdate()
+    await appState.quitAndInstallUpdate()
   })
 
   safeHandle("delete-meeting", async (_, id: string) => {
@@ -1047,6 +1056,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-open-at-login", async () => {
     const settings = app.getLoginItemSettings();
     return settings.openAtLogin;
+  });
+
+  safeHandle("set-phone-interviewer-mode", async (_, enabled: boolean) => {
+    appState.setPhoneInterviewerMode(enabled);
+    return { success: true };
+  });
+
+  safeHandle("get-phone-interviewer-mode", async () => {
+    return appState.getPhoneInterviewerMode();
   });
 
   // LLM Model Management Handlers
@@ -2882,6 +2900,38 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Profile Engine IPC Handlers
   // ==========================================
 
+  safeHandle("profile:preview-resume-import", async (_, payload: { filePath: string; projectCount?: number }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+      }
+      return await orchestrator.previewResumeImport(payload);
+    } catch (error: any) {
+      console.error('[IPC] profile:preview-resume-import error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("profile:apply-resume-import", async (_, payload: {
+    filePath: string;
+    projectCount?: number;
+    mappings?: Array<{ previewId: string; projectId?: string | null }>;
+    editedProjects?: Array<any>;
+    replaceMode: "confirmed_replace";
+  }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+      }
+      return await orchestrator.applyResumeImport(payload);
+    } catch (error: any) {
+      console.error('[IPC] profile:apply-resume-import error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   safeHandle("profile:upload-resume", async (_, filePath: string) => {
     try {
       console.log(`[IPC] profile:upload-resume called with: ${filePath}`);
@@ -2910,7 +2960,8 @@ export function initializeIpcHandlers(appState: AppState): void {
         profileMode: status.activeMode,
         name: status.resumeSummary?.name,
         role: status.resumeSummary?.role,
-        totalExperienceYears: status.resumeSummary?.totalExperienceYears
+        totalExperienceYears: status.resumeSummary?.totalExperienceYears,
+        preferredResumeProjectCount: status.preferredResumeProjectCount,
       };
     } catch (error: any) {
       return { hasProfile: false, profileMode: false };
@@ -3037,6 +3088,18 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle("projectLibrary:updateProject", async (_, project: any) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return orchestrator.updateProject(project);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   safeHandle("projectLibrary:attachAssets", async (_, { projectId, filePaths }: { projectId: string; filePaths: string[] }) => {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
@@ -3056,6 +3119,84 @@ export function initializeIpcHandlers(appState: AppState): void {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
       return await orchestrator.attachRepo(projectId, repoPath);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:getProjectDetail", async (_, projectId: string) => {
+    const orchestrator = appState.getKnowledgeOrchestrator();
+    if (!orchestrator) return null;
+    return orchestrator.getProjectDetail(projectId);
+  });
+
+  safeHandle("projectLibrary:listAssets", async (_, projectId: string) => {
+    const orchestrator = appState.getKnowledgeOrchestrator();
+    if (!orchestrator) return [];
+    return orchestrator.listProjectAssets(projectId);
+  });
+
+  safeHandle("projectLibrary:updateAssetText", async (_, payload: { assetId: string; rawText: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return await orchestrator.updateAssetText(payload.assetId, payload.rawText);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:deleteAsset", async (_, assetId: string) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return orchestrator.deleteAsset(assetId);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:listRepos", async (_, projectId: string) => {
+    const orchestrator = appState.getKnowledgeOrchestrator();
+    if (!orchestrator) return [];
+    return orchestrator.listRepos(projectId);
+  });
+
+  safeHandle("projectLibrary:replaceRepo", async (_, payload: { projectId: string; repoRoot: string; repoPath: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return await orchestrator.replaceRepo(payload.projectId, payload.repoRoot, payload.repoPath);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:reindexRepo", async (_, payload: { projectId: string; repoRoot: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return await orchestrator.reindexRepo(payload.projectId, payload.repoRoot);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:deleteRepo", async (_, payload: { projectId: string; repoRoot: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized' };
+      }
+      return orchestrator.deleteRepo(payload.projectId, payload.repoRoot);
     } catch (error: any) {
       return { success: false, error: error.message };
     }

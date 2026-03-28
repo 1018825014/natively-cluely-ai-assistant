@@ -1,6 +1,17 @@
 import Database from "better-sqlite3";
+import path from "path";
 import { randomUUID } from "crypto";
-import { EvidenceHit, JDProfile, ProjectFactCard, ProjectLibraryState, ProjectRecord, ResumeIdentity } from "./types";
+import {
+  AssetRecord,
+  EvidenceHit,
+  JDProfile,
+  ProjectAssetKind,
+  ProjectFactCard,
+  ProjectLibraryState,
+  ProjectRecord,
+  RepoAttachmentSummary,
+  ResumeIdentity,
+} from "./types";
 
 type SettingKey =
   | "identity"
@@ -10,7 +21,8 @@ type SettingKey =
   | "active_project_ids"
   | "active_jd"
   | "jd_bias_enabled"
-  | "last_evidence_hits";
+  | "last_evidence_hits"
+  | "resume_project_count";
 
 type ChunkRow = {
   id: string;
@@ -25,6 +37,37 @@ type ChunkRow = {
   asset_name: string;
   asset_kind: string;
 };
+
+type ProjectRow = {
+  id: string;
+  title: string;
+  summary: string | null;
+  fact_card_json: string;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+  asset_count: number;
+  chunk_count: number;
+};
+
+type AssetRow = {
+  id: string;
+  project_id: string;
+  kind: ProjectAssetKind;
+  name: string;
+  source_path: string | null;
+  status: "ready" | "processing" | "failed";
+  raw_text: string | null;
+  metadata_json: string | null;
+  created_at: string;
+  updated_at: string;
+  chunk_count: number;
+};
+
+function clampProjectCount(value: number | null | undefined): number {
+  const numeric = Number(value || 3);
+  return Math.min(5, Math.max(1, Number.isFinite(numeric) ? Math.round(numeric) : 3));
+}
 
 function normalizeList(values: any): string[] {
   if (!Array.isArray(values)) return [];
@@ -95,6 +138,49 @@ function buildFactCardContent(project: ProjectRecord): string {
     .join("\n");
 }
 
+function emptyFactCard(title: string, summary: string): ProjectFactCard {
+  return {
+    title,
+    summary,
+    responsibilities: [],
+    techStack: [],
+    modules: [],
+    metrics: [],
+    highlights: [],
+    keywords: [],
+  };
+}
+
+function mapProjectRow(row: ProjectRow): ProjectRecord {
+  return {
+    id: row.id,
+    title: row.title,
+    summary: row.summary || "",
+    factCard: safeJsonParse<ProjectFactCard>(row.fact_card_json, emptyFactCard(row.title, row.summary || "")),
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    assetCount: Number(row.asset_count || 0),
+    chunkCount: Number(row.chunk_count || 0),
+  };
+}
+
+function mapAssetRow(row: AssetRow): AssetRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    kind: row.kind,
+    name: row.name,
+    sourcePath: row.source_path,
+    status: row.status,
+    metadata: safeJsonParse<Record<string, any>>(row.metadata_json, {}),
+    rawText: row.raw_text || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    chunkCount: Number(row.chunk_count || 0),
+  };
+}
+
 export class ProjectKnowledgeStore {
   constructor(private readonly db: Database.Database) {
     this.db.pragma("foreign_keys = ON");
@@ -161,6 +247,9 @@ export class ProjectKnowledgeStore {
     if (this.getSetting("jd_bias_enabled", null) === null) {
       this.setSetting("jd_bias_enabled", false);
     }
+    if (this.getSetting("resume_project_count", null) === null) {
+      this.setSetting("resume_project_count", 3);
+    }
   }
 
   private setSetting(key: SettingKey, value: any): void {
@@ -180,10 +269,40 @@ export class ProjectKnowledgeStore {
     return safeJsonParse<T>(row?.value_json, fallback);
   }
 
+  private touchProjects(projectIds: string[]): void {
+    const uniqueIds = Array.from(new Set(projectIds.filter(Boolean)));
+    if (!uniqueIds.length) return;
+    const update = this.db.prepare(`UPDATE project_library_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+    for (const projectId of uniqueIds) {
+      update.run(projectId);
+    }
+  }
+
   public clearAllProjects(): void {
     this.db.prepare(`DELETE FROM project_library_projects`).run();
     this.setSetting("active_project_ids", []);
     this.setSetting("last_evidence_hits", []);
+  }
+
+  public deleteProject(projectId: string): void {
+    this.deleteProjects([projectId]);
+  }
+
+  public deleteProjects(projectIds: string[]): void {
+    const uniqueIds = Array.from(new Set(projectIds.filter(Boolean)));
+    if (!uniqueIds.length) return;
+
+    const del = this.db.prepare(`DELETE FROM project_library_projects WHERE id = ?`);
+    const tx = this.db.transaction(() => {
+      for (const projectId of uniqueIds) {
+        del.run(projectId);
+      }
+    });
+    tx();
+
+    const remainingIds = new Set(this.listProjects().map((project) => project.id));
+    const filteredActive = this.getActiveProjectIds().filter((projectId) => remainingIds.has(projectId));
+    this.setActiveProjectIds(filteredActive);
   }
 
   public setIdentity(identity: ResumeIdentity): void {
@@ -251,6 +370,14 @@ export class ProjectKnowledgeStore {
     return this.getSetting("last_evidence_hits", []);
   }
 
+  public setPreferredResumeProjectCount(projectCount: number): void {
+    this.setSetting("resume_project_count", clampProjectCount(projectCount));
+  }
+
+  public getPreferredResumeProjectCount(): number {
+    return clampProjectCount(this.getSetting<number>("resume_project_count", 3));
+  }
+
   public upsertProject(input: {
     id?: string;
     title: string;
@@ -297,29 +424,9 @@ export class ProjectKnowledgeStore {
         WHERE p.id = ?
         GROUP BY p.id
       `)
-      .get(projectId) as any;
+      .get(projectId) as ProjectRow | undefined;
 
-    if (!row) return null;
-    return {
-      id: row.id,
-      title: row.title,
-      summary: row.summary || "",
-      factCard: safeJsonParse<ProjectFactCard>(row.fact_card_json, {
-        title: row.title,
-        summary: row.summary || "",
-        responsibilities: [],
-        techStack: [],
-        modules: [],
-        metrics: [],
-        highlights: [],
-        keywords: [],
-      }),
-      isActive: Boolean(row.is_active),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      assetCount: Number(row.asset_count || 0),
-      chunkCount: Number(row.chunk_count || 0),
-    };
+    return row ? mapProjectRow(row) : null;
   }
 
   public listProjects(): ProjectRecord[] {
@@ -335,28 +442,106 @@ export class ProjectKnowledgeStore {
         GROUP BY p.id
         ORDER BY p.updated_at DESC, p.created_at DESC
       `)
-      .all() as any[];
+      .all() as ProjectRow[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      summary: row.summary || "",
-      factCard: safeJsonParse<ProjectFactCard>(row.fact_card_json, {
-        title: row.title,
-        summary: row.summary || "",
-        responsibilities: [],
-        techStack: [],
-        modules: [],
-        metrics: [],
-        highlights: [],
-        keywords: [],
-      }),
-      isActive: Boolean(row.is_active),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      assetCount: Number(row.asset_count || 0),
-      chunkCount: Number(row.chunk_count || 0),
-    }));
+    return rows.map(mapProjectRow);
+  }
+
+  public getAsset(assetId: string): AssetRecord | null {
+    const row = this.db
+      .prepare(`
+        SELECT
+          a.*,
+          COUNT(DISTINCT c.id) AS chunk_count
+        FROM project_library_assets a
+        LEFT JOIN project_library_chunks c ON c.asset_id = a.id
+        WHERE a.id = ?
+        GROUP BY a.id
+      `)
+      .get(assetId) as AssetRow | undefined;
+
+    return row ? mapAssetRow(row) : null;
+  }
+
+  public listAssets(projectId: string): AssetRecord[] {
+    const rows = this.db
+      .prepare(`
+        SELECT
+          a.*,
+          COUNT(DISTINCT c.id) AS chunk_count
+        FROM project_library_assets a
+        LEFT JOIN project_library_chunks c ON c.asset_id = a.id
+        WHERE a.project_id = ?
+        GROUP BY a.id
+        ORDER BY a.updated_at DESC, a.created_at DESC
+      `)
+      .all(projectId) as AssetRow[];
+
+    return rows.map(mapAssetRow);
+  }
+
+  public listAssetsByKind(kind?: ProjectAssetKind): AssetRecord[] {
+    const rows = kind
+      ? (this.db
+          .prepare(`
+            SELECT
+              a.*,
+              COUNT(DISTINCT c.id) AS chunk_count
+            FROM project_library_assets a
+            LEFT JOIN project_library_chunks c ON c.asset_id = a.id
+            WHERE a.kind = ?
+            GROUP BY a.id
+            ORDER BY a.updated_at DESC, a.created_at DESC
+          `)
+          .all(kind) as AssetRow[])
+      : (this.db
+          .prepare(`
+            SELECT
+              a.*,
+              COUNT(DISTINCT c.id) AS chunk_count
+            FROM project_library_assets a
+            LEFT JOIN project_library_chunks c ON c.asset_id = a.id
+            GROUP BY a.id
+            ORDER BY a.updated_at DESC, a.created_at DESC
+          `)
+          .all() as AssetRow[]);
+
+    return rows.map(mapAssetRow);
+  }
+
+  public listRepos(projectId: string): RepoAttachmentSummary[] {
+    const assets = this.listAssets(projectId);
+    const grouped = new Map<string, RepoAttachmentSummary>();
+
+    for (const asset of assets) {
+      if (asset.kind !== "repo" && asset.kind !== "code_file") continue;
+      const repoRoot = asset.metadata?.repoRoot || (asset.kind === "repo" ? asset.sourcePath : null);
+      if (!repoRoot) continue;
+
+      const existing: RepoAttachmentSummary =
+        grouped.get(repoRoot) || {
+          repoRoot,
+          repoName: asset.metadata?.repoName || path.basename(repoRoot),
+          sourcePath: asset.sourcePath,
+          repoAssetId: undefined,
+          codeFileCount: 0,
+          totalAssets: 0,
+        };
+
+      existing.totalAssets += 1;
+      if (asset.kind === "code_file") {
+        existing.codeFileCount += 1;
+      }
+      if (asset.kind === "repo") {
+        existing.repoAssetId = asset.id;
+        existing.sourcePath = asset.sourcePath;
+        existing.repoName = asset.metadata?.repoName || asset.name || existing.repoName;
+      }
+
+      grouped.set(repoRoot, existing);
+    }
+
+    return Array.from(grouped.values()).sort((a, b) => a.repoName.localeCompare(b.repoName));
   }
 
   public replaceProjectChunks(
@@ -374,7 +559,7 @@ export class ProjectKnowledgeStore {
       embedding?: number[] | null;
       metadata?: Record<string, any>;
     }>
-  ): void {
+  ): AssetRecord {
     const assetId = randomUUID();
 
     this.db
@@ -412,24 +597,113 @@ export class ProjectKnowledgeStore {
       );
     });
 
-    this.db
-      .prepare(`UPDATE project_library_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(projectId);
+    this.touchProjects([projectId]);
+    return this.getAsset(assetId)!;
+  }
+
+  public replaceAssetChunks(
+    assetId: string,
+    asset: {
+      kind?: string;
+      name?: string;
+      sourcePath?: string | null;
+      rawText: string;
+      metadata?: Record<string, any>;
+    },
+    chunks: Array<{
+      chunkType: string;
+      content: string;
+      embedding?: number[] | null;
+      metadata?: Record<string, any>;
+    }>
+  ): AssetRecord | null {
+    const existing = this.db
+      .prepare(`SELECT id, project_id, kind, name, source_path, metadata_json FROM project_library_assets WHERE id = ?`)
+      .get(assetId) as
+      | {
+          id: string;
+          project_id: string;
+          kind: string;
+          name: string;
+          source_path: string | null;
+          metadata_json: string | null;
+        }
+      | undefined;
+
+    if (!existing) return null;
+
+    const projectId = existing.project_id;
+    const mergedMetadata = asset.metadata ?? safeJsonParse<Record<string, any>>(existing.metadata_json, {});
+
+    const replace = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM project_library_chunks WHERE asset_id = ?`).run(assetId);
+      this.db
+        .prepare(`
+          UPDATE project_library_assets
+          SET kind = ?, name = ?, source_path = ?, status = 'ready', raw_text = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `)
+        .run(
+          asset.kind || existing.kind,
+          asset.name || existing.name,
+          asset.sourcePath === undefined ? existing.source_path : asset.sourcePath,
+          asset.rawText,
+          JSON.stringify(mergedMetadata),
+          assetId
+        );
+
+      const insertChunk = this.db.prepare(`
+        INSERT INTO project_library_chunks (
+          id, project_id, asset_id, chunk_index, chunk_type, content, embedding_json, token_count, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      chunks.forEach((chunk, index) => {
+        insertChunk.run(
+          randomUUID(),
+          projectId,
+          assetId,
+          index,
+          chunk.chunkType,
+          chunk.content,
+          chunk.embedding ? JSON.stringify(chunk.embedding) : null,
+          chunk.content.split(/\s+/).filter(Boolean).length,
+          JSON.stringify(chunk.metadata || {})
+        );
+      });
+    });
+
+    replace();
+    this.touchProjects([projectId]);
+    return this.getAsset(assetId);
+  }
+
+  public deleteAsset(assetId: string): void {
+    this.deleteAssets([assetId]);
+  }
+
+  public deleteAssets(assetIds: string[]): void {
+    const uniqueIds = Array.from(new Set(assetIds.filter(Boolean)));
+    if (!uniqueIds.length) return;
+
+    const projectIds: string[] = [];
+    const selectProject = this.db.prepare(`SELECT project_id FROM project_library_assets WHERE id = ?`);
+    const remove = this.db.prepare(`DELETE FROM project_library_assets WHERE id = ?`);
+
+    const tx = this.db.transaction(() => {
+      for (const assetId of uniqueIds) {
+        const row = selectProject.get(assetId) as { project_id: string } | undefined;
+        if (row?.project_id) projectIds.push(row.project_id);
+        remove.run(assetId);
+      }
+    });
+    tx();
+    this.touchProjects(projectIds);
   }
 
   public deleteDocumentsByKind(kind: string): void {
-    const assetIds = this.db.prepare(`SELECT id FROM project_library_assets WHERE kind = ?`).all(kind) as Array<{ id: string }>;
-    const deleteChunks = this.db.prepare(`DELETE FROM project_library_chunks WHERE asset_id = ?`);
-    const deleteAsset = this.db.prepare(`DELETE FROM project_library_assets WHERE id = ?`);
-
-    const tx = this.db.transaction(() => {
-      for (const asset of assetIds) {
-        deleteChunks.run(asset.id);
-        deleteAsset.run(asset.id);
-      }
-    });
-
-    tx();
+    const assets = this.listAssetsByKind(kind as ProjectAssetKind);
+    this.deleteAssets(assets.map((asset) => asset.id));
   }
 
   public getProjectFacts(projectId: string): ProjectFactCard | null {
@@ -437,7 +711,11 @@ export class ProjectKnowledgeStore {
   }
 
   public searchEvidence(projectIds: string[], query: string, queryEmbedding: number[] | null, limit: number): EvidenceHit[] {
-    const activeProjects = projectIds.length ? projectIds : this.listProjects().filter((project) => project.isActive).map((project) => project.id);
+    const activeProjects = projectIds.length
+      ? projectIds
+      : this.listProjects()
+          .filter((project) => project.isActive)
+          .map((project) => project.id);
     if (!activeProjects.length) return [];
 
     const placeholders = activeProjects.map(() => "?").join(", ");
@@ -509,9 +787,15 @@ export class ProjectKnowledgeStore {
 
   public buildState(): ProjectLibraryState {
     const projects = this.listProjects();
-    const activeProjectIds = this.getActiveProjectIds().length
-      ? this.getActiveProjectIds()
+    const validProjectIds = new Set(projects.map((project) => project.id));
+    const preferredActiveIds = this.getActiveProjectIds().filter((projectId) => validProjectIds.has(projectId));
+    const activeProjectIds = preferredActiveIds.length
+      ? preferredActiveIds
       : projects.filter((project) => project.isActive).map((project) => project.id);
+
+    if (preferredActiveIds.length !== this.getActiveProjectIds().length) {
+      this.setActiveProjectIds(activeProjectIds);
+    }
 
     return {
       identity: this.getIdentity(),
@@ -524,6 +808,7 @@ export class ProjectKnowledgeStore {
       activeJD: this.getActiveJD(),
       jdBiasEnabled: this.isJDBiasEnabled(),
       lastEvidenceHits: this.getLastEvidenceHits(),
+      preferredResumeProjectCount: this.getPreferredResumeProjectCount(),
     };
   }
 }

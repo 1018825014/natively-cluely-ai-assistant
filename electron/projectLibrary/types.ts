@@ -65,6 +65,25 @@ export interface ResumeProjectInput {
   isActive?: boolean;
 }
 
+export interface ResumeImportPreviewProject extends ResumeProjectInput {
+  previewId: string;
+  sourceExcerpt?: string;
+}
+
+export interface ResumeImportPreview {
+  filePath: string;
+  identity: ResumeIdentity;
+  skills: string[];
+  projectCount: number;
+  projects: ResumeImportPreviewProject[];
+  createdAt: string;
+}
+
+export interface ResumeImportMapping {
+  previewId: string;
+  projectId?: string | null;
+}
+
 export interface ProjectRecord {
   id: string;
   title: string;
@@ -86,6 +105,9 @@ export interface AssetRecord {
   status: "ready" | "processing" | "failed";
   metadata: Record<string, any>;
   rawText?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  chunkCount?: number;
 }
 
 export interface ParsedAssetContent {
@@ -94,6 +116,15 @@ export interface ParsedAssetContent {
   sourcePath: string;
   text: string;
   metadata?: Record<string, any>;
+}
+
+export interface RepoAttachmentSummary {
+  repoRoot: string;
+  repoName: string;
+  sourcePath: string | null;
+  repoAssetId?: string;
+  codeFileCount: number;
+  totalAssets: number;
 }
 
 export interface EvidenceHit {
@@ -134,4 +165,5 @@ export interface ProjectLibraryState {
   activeJD: JDProfile | null;
   jdBiasEnabled: boolean;
   lastEvidenceHits: EvidenceHit[];
+  preferredResumeProjectCount: number;
 }

@@ -430,6 +430,10 @@ export class WindowHelper {
       }
       this.overlayWindow = null
       this.isWindowVisible = false
+
+      if (!this.appState.isQuitInProgress()) {
+        void this.appState.quitGracefully()
+      }
     })
 
     // Listen for overlay close if independent closing acts as "Stop Meeting"
@@ -452,12 +456,19 @@ export class WindowHelper {
       })
 
       this.overlayWindow.on('close', (e) => {
-        // Prevent accidental closing via cmd+w if we want to enforce workflow? 
-        // Or treat as end meeting. simpler to treat as hiding for now.
+        if (this.appState.isQuitInProgress()) {
+          return;
+        }
+
+        if (this.appState.isMeetingInProgress()) {
+          e.preventDefault();
+          void this.appState.handleOverlayCloseRequest();
+          return;
+        }
+
         if (this.isWindowVisible && this.overlayWindow?.isVisible()) {
           e.preventDefault();
           this.switchToLauncher();
-          // Notify backend meeting ended? Handled via IPC ideally.
         }
       })
     }

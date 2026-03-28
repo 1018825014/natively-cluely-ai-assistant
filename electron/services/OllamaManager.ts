@@ -2,13 +2,16 @@
 import { spawn, ChildProcess } from 'child_process';
 import treeKill from 'tree-kill';
 
+const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434/api/tags';
+const DEFAULT_WAIT_TIMEOUT_MS = 120_000;
+const POLL_INTERVAL_MS = 500;
+
 export class OllamaManager {
     private static instance: OllamaManager;
     private ollamaProcess: ChildProcess | null = null;
     private isAppManaged: boolean = false;
-    private pollInterval: NodeJS.Timeout | null = null;
-    private maxRetries = 24; // 24 attempts * 5 seconds = 120 seconds (2 minutes)
-    private attempts = 0;
+    private ensureRunningPromise: Promise<boolean> | null = null;
+    private stopRequested = false;
 
     private constructor() {}
 
@@ -23,18 +26,7 @@ export class OllamaManager {
      * Initialize the manager. Checks if Ollama is running, starts it if not.
      */
     public async init(): Promise<void> {
-        console.log('[OllamaManager] Checking if Ollama is already running...');
-        const isRunning = await this.checkIsRunning();
-
-        if (isRunning) {
-            console.log('[OllamaManager] Ollama is already running. App will not manage its lifecycle.');
-            this.isAppManaged = false;
-            return;
-        }
-
-        console.log('[OllamaManager] Ollama not detected. Attempting to start in background...');
-        this.startOllama();
-        this.pollUntilReady();
+        await this.ensureRunning();
     }
 
     /**
@@ -45,7 +37,7 @@ export class OllamaManager {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 1000); // 1s timeout
             
-            const response = await fetch('http://127.0.0.1:11434/api/tags', {
+            const response = await fetch(DEFAULT_OLLAMA_URL, {
                 signal: controller.signal
             });
             
@@ -58,13 +50,34 @@ export class OllamaManager {
     }
 
     /**
+     * Ensure Ollama is reachable, starting it if necessary.
+     */
+    public async ensureRunning(timeoutMs: number = DEFAULT_WAIT_TIMEOUT_MS): Promise<boolean> {
+        if (await this.checkIsRunning()) {
+            console.log('[OllamaManager] Ollama is already running. App will not manage its lifecycle.');
+            this.isAppManaged = false;
+            return true;
+        }
+
+        if (this.ensureRunningPromise) {
+            return this.ensureRunningPromise;
+        }
+
+        this.stopRequested = false;
+        this.ensureRunningPromise = this.ensureRunningInternal(timeoutMs).finally(() => {
+            this.ensureRunningPromise = null;
+        });
+
+        return this.ensureRunningPromise;
+    }
+
+    /**
      * Spawns the 'ollama serve' command invisibly.
      */
-    private startOllama(): void {
+    private startOllama(): boolean {
         try {
             this.isAppManaged = true;
             
-            // Spawn detached and hidden
             this.ollamaProcess = spawn('ollama', ['serve'], {
                 detached: false, // Keep attached to app lifecycle
                 windowsHide: true, // Hide terminal on Windows
@@ -75,7 +88,6 @@ export class OllamaManager {
                 console.error('[OllamaManager] Failed to start Ollama. Is it installed?', err.message);
                 this.isAppManaged = false;
                 this.ollamaProcess = null;
-                if (this.pollInterval) clearInterval(this.pollInterval);
             });
 
             this.ollamaProcess.on('close', (code) => {
@@ -83,35 +95,67 @@ export class OllamaManager {
                 this.ollamaProcess = null;
             });
 
+            return true;
         } catch (err) {
             console.error('[OllamaManager] Exception while spawning Ollama:', err);
             this.isAppManaged = false;
+            return false;
         }
     }
 
     /**
-     * Polls every 5 seconds for up to 2 minutes.
+     * Polls until Ollama responds or times out.
      */
-    private pollUntilReady(): void {
-        this.attempts = 0;
+    private async ensureRunningInternal(timeoutMs: number): Promise<boolean> {
+        console.log('[OllamaManager] Checking if Ollama is already running...');
 
-        this.pollInterval = setInterval(async () => {
-            this.attempts++;
-            const isRunning = await this.checkIsRunning();
+        if (await this.checkIsRunning()) {
+            console.log('[OllamaManager] Ollama is already running. App will not manage its lifecycle.');
+            this.isAppManaged = false;
+            return true;
+        }
 
-            if (isRunning) {
-                console.log(`[OllamaManager] Successfully connected to Ollama after ${this.attempts * 5} seconds!`);
-                if (this.pollInterval) clearInterval(this.pollInterval);
-                return;
+        console.log('[OllamaManager] Ollama not detected. Attempting to start in background...');
+        if (!this.ollamaProcess) {
+            const started = this.startOllama();
+            if (!started) {
+                return false;
+            }
+        }
+
+        const deadline = Date.now() + timeoutMs;
+        let attempt = 0;
+
+        while (Date.now() < deadline) {
+            if (await this.checkIsRunning()) {
+                console.log('[OllamaManager] Successfully connected to Ollama.');
+                return true;
             }
 
-            if (this.attempts >= this.maxRetries) {
-                console.log('[OllamaManager] Timeout: Failed to connect to Ollama after 2 minutes. Please check if it is installed properly.');
-                if (this.pollInterval) clearInterval(this.pollInterval);
-            } else {
-                console.log(`[OllamaManager] Waiting for Ollama... (Attempt ${this.attempts}/${this.maxRetries})`);
+            if (this.stopRequested) {
+                console.log('[OllamaManager] Stop requested while waiting for Ollama.');
+                return false;
             }
-        }, 5000);
+
+            if (this.isAppManaged && !this.ollamaProcess) {
+                console.log('[OllamaManager] Managed Ollama process exited before becoming ready.');
+                return false;
+            }
+
+            attempt += 1;
+            if (attempt % 10 === 0) {
+                console.log(`[OllamaManager] Waiting for Ollama... (${Math.round((Date.now() - (deadline - timeoutMs)) / 1000)}s elapsed)`);
+            }
+
+            await this.sleep(POLL_INTERVAL_MS);
+        }
+
+        console.log(`[OllamaManager] Timeout: Failed to connect to Ollama after ${Math.round(timeoutMs / 1000)} seconds.`);
+        return false;
+    }
+
+    private async sleep(ms: number): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     /**
@@ -119,9 +163,7 @@ export class OllamaManager {
      * Called when Electron is quitting.
      */
     public stop(): void {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-        }
+        this.stopRequested = true;
 
         if (this.isAppManaged && this.ollamaProcess && this.ollamaProcess.pid) {
             console.log('[OllamaManager] App is quitting. Terminating managed Ollama process tree...');
@@ -138,5 +180,8 @@ export class OllamaManager {
                 console.error('[OllamaManager] Exception during kill:', e);
             }
         }
+
+        this.isAppManaged = false;
+        this.ollamaProcess = null;
     }
 }

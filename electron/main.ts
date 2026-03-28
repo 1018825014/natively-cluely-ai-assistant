@@ -56,7 +56,7 @@ import { warmupIntentClassifier } from "./llm"
 import { SttCompareRecorder, SttCompareProviderDescriptor, CompareSpeaker } from "./stt/SttCompareRecorder"
 import { buildSttBenchmarkReport } from "./stt/SttBenchmark"
 import { TechnicalGlossaryConfig } from "./stt/TechnicalGlossary"
-import { syncAlibabaHotwordConfig } from "./stt/AlibabaHotwordSync"
+import { syncAlibabaHotwordConfig, FUN_ASR_REALTIME_TARGET_MODEL, PARAFORMER_REALTIME_TARGET_MODEL } from "./stt/AlibabaHotwordSync"
 
 /** Unified type for all STT providers with optional extended capabilities */
 type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | AlibabaParaformerSTT | FunASRRealtimeSTT) & {
@@ -100,6 +100,50 @@ import { OllamaManager } from './services/OllamaManager'
 import { PromptLabService } from "./services/PromptLabService"
 import { PromptLabActionId } from "./services/PromptOverrideManager"
 
+function formatHotwordSyncTarget(targetModel: string): string {
+  switch (targetModel) {
+    case PARAFORMER_REALTIME_TARGET_MODEL:
+      return "阿里云 Paraformer";
+    case FUN_ASR_REALTIME_TARGET_MODEL:
+      return "Fun-ASR";
+    default:
+      return targetModel;
+  }
+}
+
+function formatTechnicalGlossarySyncWarning(warning: string): string {
+  if (warning.includes("Alibaba STT API key is not configured")) {
+    return "热词表已保存到本地，但还没有配置阿里云 STT API Key，暂时无法同步远端热词。";
+  }
+
+  if (warning.includes("No valid glossary entries were available for Alibaba hotword syncing")) {
+    return "热词表已保存，但当前没有可同步的有效热词条目。";
+  }
+
+  const failedPrefix = "Failed to sync Alibaba hotwords for ";
+  if (warning.startsWith(failedPrefix)) {
+    const separatorIndex = warning.indexOf(": ", failedPrefix.length);
+    const targetModel = separatorIndex >= 0
+      ? warning.slice(failedPrefix.length, separatorIndex)
+      : warning.slice(failedPrefix.length);
+    const details = separatorIndex >= 0 ? warning.slice(separatorIndex + 2).trim() : "";
+    const targetLabel = formatHotwordSyncTarget(targetModel.trim());
+    return details
+      ? `热词表已保存到本地，但 ${targetLabel} 的远端热词同步失败：${details}`
+      : `热词表已保存到本地，但 ${targetLabel} 的远端热词同步失败。`;
+  }
+
+  return `热词表已保存到本地，但远端热词同步出现提示：${warning}`;
+}
+
+function formatTechnicalGlossarySyncWarnings(warnings: string[]): string | undefined {
+  if (warnings.length === 0) {
+    return undefined;
+  }
+
+  return warnings.map((warning) => formatTechnicalGlossarySyncWarning(warning)).join(" ");
+}
+
 export class AppState {
   private static instance: AppState | null = null
 
@@ -125,6 +169,8 @@ export class AppState {
   // View management
   private view: "queue" | "solutions" = "queue"
   private isUndetectable: boolean = false
+  private phoneInterviewerMode: boolean = false
+  private isManualAnswerCaptureActive: boolean = false
 
   private problemInfo: {
     problem_statement: string
@@ -138,6 +184,13 @@ export class AppState {
   private isMeetingActive: boolean = false; // Guard for session state leaks
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
   private _ollamaBootstrapPromise: Promise<void> | null = null;
+  private quitPreparationPromise: Promise<void> | null = null;
+  private gracefulQuitPromise: Promise<void> | null = null;
+  private installUpdatePromise: Promise<void> | null = null;
+  private overlayClosePromise: Promise<void> | null = null;
+  private hasPreparedForQuit: boolean = false;
+  private isQuitRequested: boolean = false;
+  private allowNativeQuit: boolean = false;
   private rawInterviewerTranscriptState: RawInterviewerTranscriptState = {
     latest: null,
     fullText: '',
@@ -171,7 +224,8 @@ export class AppState {
     const settingsManager = SettingsManager.getInstance();
     this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
     this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}`);
+    this.phoneInterviewerMode = settingsManager.get('phoneInterviewerMode') ?? false;
+    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, phoneInterviewerMode=${this.phoneInterviewerMode}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)
@@ -573,42 +627,199 @@ export class AppState {
     return false;
   }
 
+  private async stopRealtimeSessionResources(): Promise<void> {
+    this.systemAudioCapture?.stop();
+    this.googleSTT?.stop();
+    this.microphoneCapture?.stop();
+    this.googleSTT_User?.stop();
+    this.stopCompareShadowProviders();
+
+    if (this.sttCompareRecorder.isActive()) {
+      this.sttCompareRecorder.stop();
+      this.broadcastSttCompareUpdate();
+    }
+
+    this.stopAudioTest();
+
+    if (this.ragManager) {
+      await this.ragManager.stopLiveIndexing();
+    }
+  }
+
+  private async prepareForQuit(reason: 'quit' | 'install-update' | 'before-quit'): Promise<void> {
+    if (this.hasPreparedForQuit) {
+      return;
+    }
+
+    if (this.quitPreparationPromise) {
+      return this.quitPreparationPromise;
+    }
+
+    this.quitPreparationPromise = (async () => {
+      console.log(`[Main] Preparing application shutdown via ${reason}...`);
+
+      if (this.isMeetingActive) {
+        try {
+          await this.endMeeting();
+        } catch (error) {
+          console.error(`[Main] Failed to end meeting during ${reason}:`, error);
+        }
+      }
+
+      try {
+        await this.stopRealtimeSessionResources();
+      } catch (error) {
+        console.error(`[Main] Failed to stop realtime session resources during ${reason}:`, error);
+      }
+
+      try {
+        if (this.cropperWindowHelper) {
+          this.cropperWindowHelper.dispose();
+        }
+      } catch (error) {
+        console.error('[Main] Failed to dispose CropperWindowHelper during quit:', error);
+      }
+
+      try {
+        this.hideTray();
+      } catch (error) {
+        console.error('[Main] Failed to hide tray during quit:', error);
+      }
+
+      try {
+        OllamaManager.getInstance().stop();
+      } catch (error) {
+        console.error('[Main] Failed to stop Ollama during quit:', error);
+      }
+
+      try {
+        const { CredentialsManager } = require('./services/CredentialsManager');
+        CredentialsManager.getInstance().scrubMemory();
+        this.processingHelper.getLLMHelper().scrubKeys();
+        console.log('[Main] Credentials scrubbed from memory on quit');
+      } catch (error) {
+        console.error('[Main] Failed to scrub credentials on quit:', error);
+      }
+
+      this.hasPreparedForQuit = true;
+    })().finally(() => {
+      this.quitPreparationPromise = null;
+    });
+
+    return this.quitPreparationPromise;
+  }
+
+  public async quitGracefully(): Promise<void> {
+    if (this.installUpdatePromise) {
+      return this.installUpdatePromise;
+    }
+
+    if (this.gracefulQuitPromise) {
+      return this.gracefulQuitPromise;
+    }
+
+    this.isQuitRequested = true;
+
+    this.gracefulQuitPromise = (async () => {
+      await this.prepareForQuit('quit');
+      this.allowNativeQuit = true;
+      app.quit();
+    })();
+
+    return this.gracefulQuitPromise;
+  }
+
+  public async handleOverlayCloseRequest(): Promise<void> {
+    if (this.overlayClosePromise) {
+      return this.overlayClosePromise;
+    }
+
+    this.overlayClosePromise = (async () => {
+      if (this.isQuitRequested || this.allowNativeQuit) {
+        return;
+      }
+
+      if (this.isMeetingActive) {
+        try {
+          await this.endMeeting();
+        } catch (error) {
+          console.error('[Main] Failed to end meeting from overlay close:', error);
+          try {
+            await this.stopRealtimeSessionResources();
+          } catch (stopError) {
+            console.error('[Main] Failed to stop realtime resources after overlay close error:', stopError);
+          }
+        }
+      }
+
+      this.windowHelper.switchToLauncher();
+    })().finally(() => {
+      this.overlayClosePromise = null;
+    });
+
+    return this.overlayClosePromise;
+  }
+
+  public isMeetingInProgress(): boolean {
+    return this.isMeetingActive;
+  }
+
+  public isQuitInProgress(): boolean {
+    return this.isQuitRequested || this.allowNativeQuit;
+  }
+
+  public canProceedWithNativeQuit(): boolean {
+    return this.allowNativeQuit;
+  }
 
   public async quitAndInstallUpdate(): Promise<void> {
     console.log('[AutoUpdater] quitAndInstall called - applying update...')
 
-    // On macOS, unsigned apps can't auto-restart via quitAndInstall
-    // Workaround: Open the folder containing the downloaded update so user can install manually
-    if (process.platform === 'darwin') {
-      try {
-        // Get the downloaded update file path (e.g., .../Natively-1.0.9-mac.zip)
-        const updateFile = (autoUpdater as any).downloadedUpdateHelper?.file
-        console.log('[AutoUpdater] Downloaded update file:', updateFile)
-
-        if (updateFile) {
-          const updateDir = path.dirname(updateFile)
-          // Open the directory containing the update in Finder
-          await shell.openPath(updateDir)
-          console.log('[AutoUpdater] Opened update directory:', updateDir)
-
-          // Quit the app so user can install new version
-          setTimeout(() => app.quit(), 1000)
-          return
-        }
-      } catch (err) {
-        console.error('[AutoUpdater] Failed to open update directory:', err)
-      }
+    if (this.installUpdatePromise) {
+      return this.installUpdatePromise;
     }
 
-    // Fallback to standard quitAndInstall (works on Windows/Linux or if signed)
-    setImmediate(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true)
-      } catch (err) {
-        console.error('[AutoUpdater] quitAndInstall failed:', err)
-        app.exit(0)
+    this.isQuitRequested = true;
+
+    this.installUpdatePromise = (async () => {
+      await this.prepareForQuit('install-update');
+      this.allowNativeQuit = true;
+
+      // On macOS, unsigned apps can't auto-restart via quitAndInstall
+      // Workaround: Open the folder containing the downloaded update so user can install manually
+      if (process.platform === 'darwin') {
+        try {
+          // Get the downloaded update file path (e.g., .../Natively-1.0.9-mac.zip)
+          const updateFile = (autoUpdater as any).downloadedUpdateHelper?.file
+          console.log('[AutoUpdater] Downloaded update file:', updateFile)
+
+          if (updateFile) {
+            const updateDir = path.dirname(updateFile)
+            // Open the directory containing the update in Finder
+            await shell.openPath(updateDir)
+            console.log('[AutoUpdater] Opened update directory:', updateDir)
+
+            // Quit the app so user can install new version
+            setTimeout(() => app.quit(), 1000)
+            return
+          }
+        } catch (err) {
+          console.error('[AutoUpdater] Failed to open update directory:', err)
+        }
       }
-    })
+
+      // Fallback to standard quitAndInstall (works on Windows/Linux or if signed)
+      setImmediate(() => {
+        try {
+          autoUpdater.quitAndInstall(false, true)
+        } catch (err) {
+          console.error('[AutoUpdater] quitAndInstall failed:', err)
+          app.exit(0)
+        }
+      })
+    })();
+
+    return this.installUpdatePromise;
   }
 
   public async checkForUpdates(): Promise<void> {
@@ -645,6 +856,103 @@ export class AppState {
 
   public getResolvedSttProviderId(): ConfiguredSttProviderId {
     return this.getCurrentSttProviderId();
+  }
+
+  public getPhoneInterviewerMode(): boolean {
+    return this.phoneInterviewerMode;
+  }
+
+  public setPhoneInterviewerMode(enabled: boolean): void {
+    if (this.phoneInterviewerMode === enabled) {
+      return;
+    }
+
+    const previousMicSpeaker = this.getCurrentMicLogicalSpeaker();
+    this.phoneInterviewerMode = enabled;
+    SettingsManager.getInstance().set('phoneInterviewerMode', enabled);
+    this.refreshPrimarySttSampleRates();
+    this.refreshSttCompareSession();
+
+    if (this.isMeetingActive) {
+      const nextMicSpeaker = this.getCurrentMicLogicalSpeaker();
+      if (previousMicSpeaker !== nextMicSpeaker) {
+        this.flushSpeakerBoundary(previousMicSpeaker);
+      }
+    }
+  }
+
+  public beginManualAnswerCapture(): void {
+    const previousMicSpeaker = this.getCurrentMicLogicalSpeaker();
+    this.isManualAnswerCaptureActive = true;
+    this.refreshPrimarySttSampleRates();
+    this.refreshSttCompareSession();
+
+    const nextMicSpeaker = this.getCurrentMicLogicalSpeaker();
+    if (this.isMeetingActive && previousMicSpeaker !== nextMicSpeaker) {
+      this.flushSpeakerBoundary(previousMicSpeaker);
+    }
+  }
+
+  public endManualAnswerCapture(): void {
+    const previousMicSpeaker = this.getCurrentMicLogicalSpeaker();
+    this.isManualAnswerCaptureActive = false;
+
+    if (this.isMeetingActive) {
+      this.finalizeSpeakerPipeline(previousMicSpeaker);
+      this.notifySpeakerSpeechEnded(previousMicSpeaker);
+    }
+
+    this.refreshPrimarySttSampleRates();
+    this.refreshSttCompareSession();
+  }
+
+  private shouldUsePhoneInterviewerMode(): boolean {
+    return this.phoneInterviewerMode;
+  }
+
+  private shouldRouteSystemAudioToInterviewer(): boolean {
+    return !this.shouldUsePhoneInterviewerMode();
+  }
+
+  private getCurrentMicLogicalSpeaker(): CompareSpeaker {
+    return this.shouldUsePhoneInterviewerMode() && !this.isManualAnswerCaptureActive
+      ? 'interviewer'
+      : 'user';
+  }
+
+  private getInterviewerPipelineSampleRate(): number {
+    if (this.shouldUsePhoneInterviewerMode()) {
+      return this.microphoneCapture?.getSampleRate() || 48000;
+    }
+
+    return this.systemAudioCapture?.getSampleRate() || 48000;
+  }
+
+  private getUserPipelineSampleRate(): number {
+    return this.microphoneCapture?.getSampleRate() || 48000;
+  }
+
+  private refreshPrimarySttSampleRates(): void {
+    const interviewerRate = this.getInterviewerPipelineSampleRate();
+    const userRate = this.getUserPipelineSampleRate();
+
+    console.log(`[Main] Configuring Interviewer STT to ${interviewerRate}Hz`);
+    this.googleSTT?.setSampleRate(interviewerRate);
+    this.googleSTT?.setAudioChannelCount?.(1);
+
+    console.log(`[Main] Configuring User STT to ${userRate}Hz`);
+    this.googleSTT_User?.setSampleRate(userRate);
+    this.googleSTT_User?.setAudioChannelCount?.(1);
+  }
+
+  private finalizeSpeakerPipeline(speaker: CompareSpeaker): void {
+    const provider = speaker === 'interviewer' ? this.googleSTT : this.googleSTT_User;
+    provider?.finalize?.();
+  }
+
+  private flushSpeakerBoundary(speaker: CompareSpeaker): void {
+    this.finalizeSpeakerPipeline(speaker);
+    this.notifySpeakerSpeechEnded(speaker);
   }
 
   private normalizeTranscriptForComparison(text: string): string {
@@ -916,8 +1224,8 @@ export class AppState {
     stt.setTechnicalGlossaryConfig?.(credentialsManager.getTechnicalGlossaryConfig());
 
     const sampleRate = speaker === 'interviewer'
-      ? (this.systemAudioCapture?.getSampleRate() || 48000)
-      : (this.microphoneCapture?.getSampleRate() || 48000);
+      ? this.getInterviewerPipelineSampleRate()
+      : this.getUserPipelineSampleRate();
 
     stt.setSampleRate(sampleRate);
     stt.setAudioChannelCount?.(1);
@@ -1069,15 +1377,11 @@ export class AppState {
   private notifySpeakerSpeechEnded(speaker: CompareSpeaker): void {
     const timestamp = Date.now();
 
-    if (speaker === 'interviewer') {
-      this.intelligenceManager.maybeCommitLiveTranscriptSegment();
-      if (this.intelligenceManager.hasEditedLiveTranscript()) {
-        void this.resyncLiveMeetingRag().catch((error) => {
-          console.warn('[Main] Failed to resync live RAG after speech end:', error);
-        });
-      }
-    } else {
-      this.intelligenceManager.commitLiveTranscriptSegment(undefined, 'user');
+    this.intelligenceManager.maybeCommitLiveTranscriptSegment(undefined, speaker);
+    if (this.intelligenceManager.hasEditedLiveTranscript()) {
+      void this.resyncLiveMeetingRag().catch((error) => {
+        console.warn('[Main] Failed to resync live RAG after speech end:', error);
+      });
     }
 
     if (speaker === 'interviewer') {
@@ -1294,9 +1598,15 @@ export class AppState {
         this.systemAudioCapture = new SystemAudioCapture();
         // Wire Capture -> STT
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          if (!this.shouldRouteSystemAudioToInterviewer()) {
+            return;
+          }
           this.writeToSpeakerPipeline('interviewer', chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
+          if (!this.shouldRouteSystemAudioToInterviewer()) {
+            return;
+          }
           this.notifySpeakerSpeechEnded('interviewer');
         });
         this.systemAudioCapture.on('error', (err: Error) => {
@@ -1307,10 +1617,10 @@ export class AppState {
       if (!this.microphoneCapture) {
         this.microphoneCapture = new MicrophoneCapture();
         this.microphoneCapture.on('data', (chunk: Buffer) => {
-          this.writeToSpeakerPipeline('user', chunk);
+          this.writeToSpeakerPipeline(this.getCurrentMicLogicalSpeaker(), chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.notifySpeakerSpeechEnded('user');
+          this.notifySpeakerSpeechEnded(this.getCurrentMicLogicalSpeaker());
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture Error:', err);
@@ -1330,16 +1640,7 @@ export class AppState {
       // Always sync rates, even if just initialized, to ensure consistency
 
       // 1. Sync System Audio Rate
-      const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
-      this.googleSTT?.setSampleRate(sysRate);
-      this.googleSTT?.setAudioChannelCount?.(1);
-
-      // 2. Sync Mic Rate
-      const micRate = this.microphoneCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring User STT to ${micRate}Hz`);
-      this.googleSTT_User?.setSampleRate(micRate);
-      this.googleSTT_User?.setAudioChannelCount?.(1);
+      this.refreshPrimarySttSampleRates();
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
 
@@ -1362,12 +1663,17 @@ export class AppState {
       this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
       const rate = this.systemAudioCapture.getSampleRate();
       console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
-      this.googleSTT?.setSampleRate(rate);
 
       this.systemAudioCapture.on('data', (chunk: Buffer) => {
+        if (!this.shouldRouteSystemAudioToInterviewer()) {
+          return;
+        }
         this.writeToSpeakerPipeline('interviewer', chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
+        if (!this.shouldRouteSystemAudioToInterviewer()) {
+          return;
+        }
         this.notifySpeakerSpeechEnded('interviewer');
       });
       this.systemAudioCapture.on('error', (err: Error) => {
@@ -1380,12 +1686,17 @@ export class AppState {
         this.systemAudioCapture = new SystemAudioCapture(); // Default
         const rate = this.systemAudioCapture.getSampleRate();
         console.log(`[Main] SystemAudioCapture (Default) rate: ${rate}Hz`);
-        this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          if (!this.shouldRouteSystemAudioToInterviewer()) {
+            return;
+          }
           this.writeToSpeakerPipeline('interviewer', chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
+          if (!this.shouldRouteSystemAudioToInterviewer()) {
+            return;
+          }
           this.notifySpeakerSpeechEnded('interviewer');
         });
         this.systemAudioCapture.on('error', (err: Error) => {
@@ -1407,13 +1718,12 @@ export class AppState {
       this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
       const rate = this.microphoneCapture.getSampleRate();
       console.log(`[Main] MicrophoneCapture rate: ${rate}Hz`);
-      this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
-        this.writeToSpeakerPipeline('user', chunk);
+        this.writeToSpeakerPipeline(this.getCurrentMicLogicalSpeaker(), chunk);
       });
       this.microphoneCapture.on('speech_ended', () => {
-        this.notifySpeakerSpeechEnded('user');
+        this.notifySpeakerSpeechEnded(this.getCurrentMicLogicalSpeaker());
       });
       this.microphoneCapture.on('error', (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
@@ -1425,13 +1735,12 @@ export class AppState {
         this.microphoneCapture = new MicrophoneCapture(); // Default
         const rate = this.microphoneCapture.getSampleRate();
         console.log(`[Main] MicrophoneCapture (Default) rate: ${rate}Hz`);
-        this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
-          this.writeToSpeakerPipeline('user', chunk);
+          this.writeToSpeakerPipeline(this.getCurrentMicLogicalSpeaker(), chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.notifySpeakerSpeechEnded('user');
+          this.notifySpeakerSpeechEnded(this.getCurrentMicLogicalSpeaker());
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture (Default) Error:', err);
@@ -1441,6 +1750,7 @@ export class AppState {
       }
     }
 
+    this.refreshPrimarySttSampleRates();
     this.refreshSttCompareSession();
   }
 
@@ -1526,17 +1836,14 @@ export class AppState {
   }
 
   public finalizeMicSTT(): void {
-    // We only want to finalize the user microphone, because the context is Manual Answer
-    if (this.googleSTT_User?.finalize) {
-      console.log('[Main] Finalizing STT');
-      this.googleSTT_User.finalize();
-    }
+    this.endManualAnswerCapture();
   }
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
 
     this.isMeetingActive = true;
+    this.isManualAnswerCaptureActive = false;
     this.pendingLiveRagTranscript.interviewer = null;
     this.pendingLiveRagTranscript.user = null;
     this.promptLabService.resetMeetingState();
@@ -1592,6 +1899,7 @@ export class AppState {
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.isMeetingActive = false; // Block new data immediately
+    this.isManualAnswerCaptureActive = false;
     this.promptLabService.resetMeetingState();
 
     this.flushPendingLiveRagTranscript('interviewer');
@@ -1834,7 +2142,7 @@ export class AppState {
     const credentialsManager = CredentialsManager.getInstance();
     const syncResult = await syncAlibabaHotwordConfig(config, credentialsManager.getAlibabaSttApiKey());
     const nextConfig = syncResult.config;
-    const warning = syncResult.warnings.length > 0 ? syncResult.warnings.join(' ') : undefined;
+    const warning = formatTechnicalGlossarySyncWarnings(syncResult.warnings);
 
     credentialsManager.setTechnicalGlossaryConfig(nextConfig);
     this.googleSTT?.setTechnicalGlossaryConfig?.(nextConfig);
@@ -2328,7 +2636,7 @@ export class AppState {
         label: 'Quit',
         accelerator: 'Command+Q',
         click: () => {
-          app.quit()
+          void this.quitGracefully()
         }
       }
     ])
@@ -2762,25 +3070,16 @@ async function initializeApp() {
 
   // Scrub API keys from memory on quit to minimize exposure window
   app.on("before-quit", (event) => {
-    console.log("App is quitting, cleaning up resources...");
-
-    // Dispose CropperWindowHelper to clean up IPC listeners and prevent memory leaks
-    // This is critical to prevent resource leaks and ensure proper cleanup
-    if (appState?.cropperWindowHelper) {
-      appState.cropperWindowHelper.dispose();
+    if (appState.canProceedWithNativeQuit()) {
+      return;
     }
 
-    // Kill Ollama if we started it
-    OllamaManager.getInstance().stop();
-
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().scrubMemory();
-      appState.processingHelper.getLLMHelper().scrubKeys();
-      console.log('[Main] Credentials scrubbed from memory on quit');
-    } catch (e) {
-      console.error('[Main] Failed to scrub credentials on quit:', e);
-    }
+    console.log('[Main] Intercepted native quit; switching to graceful shutdown.');
+    event.preventDefault();
+    void appState.quitGracefully().catch((error) => {
+      console.error('[Main] Graceful quit failed:', error);
+      app.exit(1);
+    });
   })
 
 

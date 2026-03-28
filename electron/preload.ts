@@ -382,6 +382,8 @@ interface ElectronAPI {
   // Meeting Lifecycle
   startMeeting: (metadata?: any) => Promise<{ success: boolean; error?: string }>
   endMeeting: () => Promise<{ success: boolean; error?: string }>
+  beginManualAnswerCapture: () => Promise<{ success: boolean; error?: string }>
+  endManualAnswerCapture: () => Promise<{ success: boolean; error?: string }>
   finalizeMicSTT: () => Promise<void>
   getRecentMeetings: () => Promise<Array<{ id: string; title: string; date: string; duration: string; summary: string }>>
   getMeetingDetails: (id: string) => Promise<any>
@@ -505,7 +507,15 @@ interface ElectronAPI {
 
   // Profile Engine API
   profileUploadResume: (filePath: string) => Promise<{ success: boolean; error?: string }>;
-  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number }>;
+  profilePreviewResumeImport: (payload: { filePath: string; projectCount?: number }) => Promise<{ success: boolean; preview?: any; error?: string }>;
+  profileApplyResumeImport: (payload: {
+    filePath: string;
+    projectCount?: number;
+    mappings?: Array<{ previewId: string; projectId?: string | null }>;
+    editedProjects?: Array<any>;
+    replaceMode: "confirmed_replace";
+  }) => Promise<{ success: boolean; projectCount?: number; identity?: any; projects?: any[]; error?: string }>;
+  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number }>;
   profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   profileDelete: () => Promise<{ success: boolean; error?: string }>;
   profileGetProfile: () => Promise<any>;
@@ -520,8 +530,17 @@ interface ElectronAPI {
   // Project Library API
   projectLibraryListProjects: () => Promise<any[]>;
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
+  projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>;
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
+  projectLibraryGetProjectDetail: (projectId: string) => Promise<any>;
+  projectLibraryListAssets: (projectId: string) => Promise<any[]>;
+  projectLibraryUpdateAssetText: (payload: { assetId: string; rawText: string }) => Promise<{ success: boolean; asset?: any; error?: string }>;
+  projectLibraryDeleteAsset: (assetId: string) => Promise<{ success: boolean; error?: string }>;
+  projectLibraryListRepos: (projectId: string) => Promise<any[]>;
+  projectLibraryReplaceRepo: (payload: { projectId: string; repoRoot: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
+  projectLibraryReindexRepo: (payload: { projectId: string; repoRoot: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
+  projectLibraryDeleteRepo: (payload: { projectId: string; repoRoot: string }) => Promise<{ success: boolean; error?: string }>;
   projectLibraryGetProjectFacts: (projectId: string) => Promise<any>;
   projectLibrarySetActiveProjects: (projectIds: string[]) => Promise<{ success: boolean; state?: any; error?: string }>;
   projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => Promise<{ success: boolean; state?: any; error?: string }>;
@@ -742,6 +761,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getUndetectable: () => ipcRenderer.invoke("get-undetectable"),
   setOpenAtLogin: (open: boolean) => ipcRenderer.invoke("set-open-at-login", open),
   getOpenAtLogin: () => ipcRenderer.invoke("get-open-at-login"),
+  setPhoneInterviewerMode: (enabled: boolean) => ipcRenderer.invoke("set-phone-interviewer-mode", enabled),
+  getPhoneInterviewerMode: () => ipcRenderer.invoke("get-phone-interviewer-mode"),
   setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => ipcRenderer.invoke("set-disguise", mode),
   getDisguise: () => ipcRenderer.invoke("get-disguise"),
   onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => {
@@ -915,6 +936,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Meeting Lifecycle
   startMeeting: (metadata?: any) => ipcRenderer.invoke("start-meeting", metadata),
   endMeeting: () => ipcRenderer.invoke("end-meeting"),
+  beginManualAnswerCapture: () => ipcRenderer.invoke("begin-manual-answer-capture"),
+  endManualAnswerCapture: () => ipcRenderer.invoke("end-manual-answer-capture"),
   finalizeMicSTT: () => ipcRenderer.invoke("finalize-mic-stt"),
   getRecentMeetings: () => ipcRenderer.invoke("get-recent-meetings"),
   getMeetingDetails: (id: string) => ipcRenderer.invoke("get-meeting-details", id),
@@ -1278,6 +1301,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Profile Engine API
   profileUploadResume: (filePath: string) => ipcRenderer.invoke('profile:upload-resume', filePath),
+  profilePreviewResumeImport: (payload: { filePath: string; projectCount?: number }) => ipcRenderer.invoke('profile:preview-resume-import', payload),
+  profileApplyResumeImport: (payload: {
+    filePath: string;
+    projectCount?: number;
+    mappings?: Array<{ previewId: string; projectId?: string | null }>;
+    editedProjects?: Array<any>;
+    replaceMode: "confirmed_replace";
+  }) => ipcRenderer.invoke('profile:apply-resume-import', payload),
   profileGetStatus: () => ipcRenderer.invoke('profile:get-status'),
   profileSetMode: (enabled: boolean) => ipcRenderer.invoke('profile:set-mode', enabled),
   profileDelete: () => ipcRenderer.invoke('profile:delete'),
@@ -1293,8 +1324,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Project Library API
   projectLibraryListProjects: () => ipcRenderer.invoke('projectLibrary:listProjects'),
   projectLibraryUpsertProject: (project: any) => ipcRenderer.invoke('projectLibrary:upsertProject', project),
+  projectLibraryUpdateProject: (project: any) => ipcRenderer.invoke('projectLibrary:updateProject', project),
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => ipcRenderer.invoke('projectLibrary:attachAssets', payload),
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => ipcRenderer.invoke('projectLibrary:attachRepo', payload),
+  projectLibraryGetProjectDetail: (projectId: string) => ipcRenderer.invoke('projectLibrary:getProjectDetail', projectId),
+  projectLibraryListAssets: (projectId: string) => ipcRenderer.invoke('projectLibrary:listAssets', projectId),
+  projectLibraryUpdateAssetText: (payload: { assetId: string; rawText: string }) => ipcRenderer.invoke('projectLibrary:updateAssetText', payload),
+  projectLibraryDeleteAsset: (assetId: string) => ipcRenderer.invoke('projectLibrary:deleteAsset', assetId),
+  projectLibraryListRepos: (projectId: string) => ipcRenderer.invoke('projectLibrary:listRepos', projectId),
+  projectLibraryReplaceRepo: (payload: { projectId: string; repoRoot: string; repoPath: string }) => ipcRenderer.invoke('projectLibrary:replaceRepo', payload),
+  projectLibraryReindexRepo: (payload: { projectId: string; repoRoot: string }) => ipcRenderer.invoke('projectLibrary:reindexRepo', payload),
+  projectLibraryDeleteRepo: (payload: { projectId: string; repoRoot: string }) => ipcRenderer.invoke('projectLibrary:deleteRepo', payload),
   projectLibraryGetProjectFacts: (projectId: string) => ipcRenderer.invoke('projectLibrary:getProjectFacts', projectId),
   projectLibrarySetActiveProjects: (projectIds: string[]) => ipcRenderer.invoke('projectLibrary:setActiveProjects', projectIds),
   projectLibrarySetAnswerMode: (mode: 'strict' | 'polished') => ipcRenderer.invoke('projectLibrary:setAnswerMode', mode),
