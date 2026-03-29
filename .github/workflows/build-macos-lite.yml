@@ -41,6 +41,46 @@ jobs:
           ./scripts/build-license-lite.ps1 `
             -ElectronBuilderArgs @('--mac', 'zip', 'dmg', '--${{ matrix.arch }}', '--publish', 'never')
 
+      - name: Smoke test macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="$(find release -maxdepth 1 -name '*-${{ matrix.arch }}-mac.zip' | head -n 1)"
+          DMG_FILE="$(find release -maxdepth 1 -name '*-${{ matrix.arch }}.dmg' | head -n 1)"
+
+          if [[ -z "${ZIP_FILE}" || -z "${DMG_FILE}" ]]; then
+            echo "Expected macOS artifacts were not found."
+            exit 1
+          fi
+
+          ZIP_DIR="$RUNNER_TEMP/macos-zip-${{ matrix.arch }}"
+          DMG_MOUNT="$RUNNER_TEMP/macos-dmg-${{ matrix.arch }}"
+
+          mkdir -p "$ZIP_DIR" "$DMG_MOUNT"
+
+          ditto -x -k "$ZIP_FILE" "$ZIP_DIR"
+          ZIP_APP="$(find "$ZIP_DIR" -maxdepth 2 -name '*.app' | head -n 1)"
+          if [[ -z "${ZIP_APP}" ]]; then
+            echo "No .app bundle found inside zip artifact."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict "$ZIP_APP"
+          plutil -p "$ZIP_APP/Contents/Info.plist" >/dev/null
+
+          hdiutil attach "$DMG_FILE" -mountpoint "$DMG_MOUNT" -nobrowse -quiet
+          trap 'hdiutil detach "$DMG_MOUNT" -quiet || true' EXIT
+
+          DMG_APP="$(find "$DMG_MOUNT" -maxdepth 2 -name '*.app' | head -n 1)"
+          if [[ -z "${DMG_APP}" ]]; then
+            echo "No .app bundle found inside dmg artifact."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict "$DMG_APP"
+          plutil -p "$DMG_APP/Contents/Info.plist" >/dev/null
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
