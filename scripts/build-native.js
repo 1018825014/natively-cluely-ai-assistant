@@ -3,11 +3,21 @@ const os = require('os');
 const path = require('path');
 
 const nativeModulePath = path.join(__dirname, '..', 'native-module');
+const cargoTargetDir = process.env.CARGO_TARGET_DIR || path.join(nativeModulePath, 'target-commercial');
 
 function runCommand(command) {
   console.log(`> ${command}`);
-  execSync(command, { stdio: 'inherit', cwd: nativeModulePath });
+  execSync(command, {
+    stdio: 'inherit',
+    cwd: nativeModulePath,
+    env: {
+      ...process.env,
+      CARGO_TARGET_DIR: cargoTargetDir,
+    },
+  });
 }
+
+console.log(`Using CARGO_TARGET_DIR=${cargoTargetDir}`);
 
 if (os.platform() === 'darwin') {
   console.log('Building for macOS (darwin) for dual architectures...');

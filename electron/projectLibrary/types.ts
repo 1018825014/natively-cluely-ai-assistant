@@ -62,6 +62,7 @@ export interface ResumeProjectInput {
   metrics?: string[];
   highlights?: string[];
   keywords?: string[];
+  sourceExcerpt?: string;
   isActive?: boolean;
 }
 

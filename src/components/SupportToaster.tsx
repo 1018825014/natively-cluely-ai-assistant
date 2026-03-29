@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Heart, X, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { commercialConfig } from '../config/commercial';
 
 interface SupportToasterProps {
     className?: string;
@@ -81,9 +82,9 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ className }) => 
     const handleSupport = () => {
         clickTimeRef.current = Date.now();
         if (window.electronAPI?.openExternal) {
-            window.electronAPI.openExternal('https://buymeacoffee.com/evinjohnn');
+            window.electronAPI.openExternal(commercialConfig.purchasePageUrl);
         } else {
-            window.open('https://buymeacoffee.com/evinjohnn', '_blank');
+            window.open(commercialConfig.purchasePageUrl, '_blank');
         }
     };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { MessageSquare, Link, Camera, Zap, Heart, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
+import { commercialConfig } from '../config/commercial';
 
 const SettingsPopup = () => {
     const { shortcuts } = useShortcuts();
@@ -258,7 +259,7 @@ const SettingsPopup = () => {
                 {/* Donate */}
                 <div
                     // @ts-ignore
-                    onClick={() => window.electronAPI.openExternal('https://buymeacoffee.com/evinjohnn')}
+                    onClick={() => window.electronAPI.openExternal(commercialConfig.purchasePageUrl)}
                     className="flex items-center justify-between px-3 py-2 hover:bg-pink-500/10 rounded-lg transition-colors duration-200 group interaction-base interaction-press"
                 >
                     <div className="flex items-center gap-3">

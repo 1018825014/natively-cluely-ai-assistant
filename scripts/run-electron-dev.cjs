@@ -5,7 +5,7 @@ const { spawn, spawnSync } = require('child_process');
 const projectRoot = path.resolve(__dirname, '..');
 const tempRoot = path.join(projectRoot, '.electron-dev');
 const sessionDir = path.join(tempRoot, `${Date.now()}-${process.pid}`);
-const mainEntry = path.join(sessionDir, 'main.js');
+const compiledMainEntry = path.join(sessionDir, 'electron', 'main.js');
 const packageEntry = path.join(sessionDir, 'package.json');
 const tscBin = require.resolve('typescript/bin/tsc');
 const electronBin = require('electron');
@@ -19,7 +19,7 @@ fs.writeFileSync(
       name: 'natively',
       productName: 'Natively',
       version: '0.0.0-dev',
-      main: 'main.js',
+      main: 'electron/main.js',
     },
     null,
     2
@@ -38,6 +38,13 @@ const compile = spawnSync(
 
 if (compile.status !== 0) {
   process.exit(compile.status || 1);
+}
+
+if (!fs.existsSync(compiledMainEntry)) {
+  process.stderr.write(
+    `[electron:dev] Expected compiled Electron entry at ${compiledMainEntry}, but it was not generated.\n`
+  );
+  process.exit(1);
 }
 
 const child = spawn(

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Natively 中国区官网</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body>
+    <main>
+      <nav class="nav">
+        <div class="brand">
+          <strong data-site-name>Natively China</strong>
+          <span data-tagline>中国区优先、本地化优先的 AI 会议与面试助手</span>
+        </div>
+        <div class="nav-links">
+          <a class="pill" data-link="downloads" href="/downloads">下载</a>
+          <a class="pill" data-link="purchase" href="/purchase">购买</a>
+          <a class="pill" data-link="activationHelp" href="/activation-help">找回许可证</a>
+        </div>
+      </nav>
+
+      <section class="hero">
+        <div class="panel">
+          <div class="eyebrow">中国区首发</div>
+          <h1><span data-app-name>Natively</span> 的中国区购买、下载与激活入口</h1>
+          <p>
+            当前版本面向中国区个人用户销售，默认采用“官网承接 + 爱发电支付 + 自建许可证服务 + 托管模型后端”的交付方式。
+            新用户购买并激活后，可直接使用托管文本、视觉和 STT 能力，不需要自己准备上游 API Key。
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" data-link="downloads" href="/downloads">下载应用</a>
+            <a class="btn btn-accent" data-link="purchase" href="/purchase">查看购买方案</a>
+            <a class="btn" data-link="activationHelp" href="/activation-help">找回许可证</a>
+          </div>
+        </div>
+
+        <aside class="card">
+          <h2>当前交付策略</h2>
+          <div class="stat-grid">
+            <div class="stat">
+              <strong>5 个 SKU</strong>
+              <span>1 天、7 天、30 天、365 天、永久版</span>
+            </div>
+            <div class="stat">
+              <strong>1 个订单 = 1 个许可证</strong>
+              <span>默认 1 台设备激活，换机前建议先停用旧设备</span>
+            </div>
+            <div class="stat">
+              <strong>v<span data-current-version>2.0.6</span></strong>
+              <span>更新入口统一回到你自己的下载页，不依赖旧 Release</span>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section">
+        <h2>首发能力</h2>
+        <div class="feature-grid">
+          <article>
+            <h3>购买链路固定</h3>
+            <p>官网负责品牌展示和解释，支付统一跳转爱发电，第一阶段不做自建支付页，也不宣传自动续费。</p>
+            <ul>
+              <li>适配微信 / 支付宝</li>
+              <li>默认手动续购</li>
+              <li>降低首发客服复杂度</li>
+            </ul>
+          </article>
+          <article>
+            <h3>许可证自动发放</h3>
+            <p>订单通过爱发电 Webhook 进入你的许可证服务，订单、激活和用量写入 SQLite，重复回调不会重复发码。</p>
+            <ul>
+              <li>支持按订单找回许可证</li>
+              <li>支持设备停用与再激活</li>
+              <li>支持托管会话与额度核验</li>
+            </ul>
+          </article>
+          <article>
+            <h3>托管优先体验</h3>
+            <p>文本和视觉通过你的 Hosted 网关调用，STT 通过百炼临时密钥完成。默认不要求新用户自行配置 Provider Key。</p>
+            <ul>
+              <li>Hosted 优先</li>
+              <li>BYOK 作为隐藏兜底</li>
+              <li>便于后续更换上游供应商</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>中国区首发 SKU</h2>
+        <div class="sku-grid" data-sku-container></div>
+      </section>
+
+      <section class="section">
+        <h2>常见问题</h2>
+        <div class="faq-grid">
+          <article class="faq-item">
+            <h3>为什么不做自动续费？</h3>
+            <p>第一阶段优先保证支付、发码、激活和售后链路稳定，统一采用时长型许可证和到期手动续购。</p>
+          </article>
+          <article class="faq-item">
+            <h3>换电脑怎么办？</h3>
+            <p>默认 1 台设备激活。换机前建议先停用旧设备；如果旧设备不可用，可通过支持邮箱处理激活释放。</p>
+          </article>
+          <article class="faq-item">
+            <h3>更新怎么交付？</h3>
+            <p>第一阶段通过下载页统一交付。应用内检测到新版本后会直接打开本页，不再依赖旧仓库发布页。</p>
+          </article>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <div>支持邮箱：<span data-support-email>待配置</span></div>
+        <div class="footer-links">
+          <a data-link="privacy" href="/privacy">隐私</a>
+          <a data-link="refund" href="/refund">退款</a>
+          <a data-link="eula" href="/eula">EULA</a>
+        </div>
+      </footer>
+    </main>
+    <script src="/assets/site.js" defer></script>
+  </body>
+</html>

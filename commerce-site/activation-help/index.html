@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>找回许可证</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body>
+    <main>
+      <nav class="nav">
+        <div class="brand">
+          <strong>找回许可证</strong>
+          <span>订单号 + 买家 ID</span>
+        </div>
+        <div class="nav-links">
+          <a class="pill" href="/">首页</a>
+          <a class="pill" href="/purchase">购买</a>
+          <a class="pill" href="/downloads">下载</a>
+        </div>
+      </nav>
+
+      <section class="status-shell section">
+        <div class="status-card">
+          <div class="eyebrow">许可证找回</div>
+          <h1 style="margin-top:18px">输入爱发电订单信息找回许可证</h1>
+          <p>
+            为了降低误发风险，找回页默认要求同时输入爱发电订单号和买家 ID。
+            如果你只有订单截图，请通过支持邮箱联系人工处理。
+          </p>
+          <form class="form-grid" data-license-help-form>
+            <div class="field">
+              <label for="order_id">爱发电订单号</label>
+              <input id="order_id" name="order_id" placeholder="例如 202603281234567890" />
+            </div>
+            <div class="field">
+              <label for="buyer_id">爱发电买家 ID</label>
+              <input id="buyer_id" name="buyer_id" placeholder="例如 user_private_id" />
+            </div>
+            <button class="btn btn-primary" type="submit">查询许可证</button>
+          </form>
+          <div class="result" data-license-result></div>
+        </div>
+
+        <aside class="status-card">
+          <h3>提交前请确认</h3>
+          <ul>
+            <li>订单必须是支付成功的订单</li>
+            <li>买家 ID 推荐使用 webhook 里的 <span class="mono">user_private_id</span></li>
+            <li>一个订单默认只会生成一个许可证</li>
+            <li>换机前建议先停用旧设备，避免命中设备上限</li>
+          </ul>
+          <div class="note" style="margin-top:16px">
+            如果你已经找到了许可证，但桌面端提示设备上限，请先在旧设备执行停用，或联系支持邮箱处理激活释放。
+          </div>
+        </aside>
+      </section>
+
+      <footer class="footer">
+        <div>支持邮箱：<span data-support-email>待配置</span></div>
+        <div class="footer-links">
+          <a href="/purchase">重新购买</a>
+          <a data-link="support" href="#">联系支持</a>
+        </div>
+      </footer>
+    </main>
+    <script src="/assets/site.js" defer></script>
+    <script src="/assets/activation-help.js" defer></script>
+  </body>
+</html>

@@ -537,7 +537,7 @@ export interface ElectronAPI {
     editedProjects?: Array<any>
     replaceMode: "confirmed_replace"
   }) => Promise<{ success: boolean; projectCount?: number; identity?: any; projects?: any[]; error?: string }>
-  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number }>
+  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number; engineInitialized?: boolean; engineError?: string }>
   profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
   profileDelete: () => Promise<{ success: boolean; error?: string }>
   profileGetProfile: () => Promise<any>
@@ -552,6 +552,7 @@ export interface ElectronAPI {
   projectLibraryListProjects: () => Promise<any[]>
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
   projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
+  projectLibraryDeleteProject: (projectId: string) => Promise<{ success: boolean; projects?: any[]; error?: string }>
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
   projectLibraryGetProjectDetail: (projectId: string) => Promise<any>
@@ -582,6 +583,35 @@ export interface ElectronAPI {
   licenseCheckPremium: () => Promise<boolean>
   licenseDeactivate: () => Promise<void>
   licenseGetHardwareId: () => Promise<string>
+  licenseGetStatus: () => Promise<{
+    success: boolean
+    status: 'inactive' | 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace' | 'invalid_license' | 'network_error'
+    isPremium: boolean
+    error?: string
+    entitlement?: {
+      licenseKey: string
+      sku: string
+      status: 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace'
+      expiresAt: string | null
+      activationLimit: number
+      orderId: string
+      buyerId: string
+      hardwareId: string
+      lastValidatedAt: string
+      offlineGraceEndsAt: string | null
+      signature: string
+    } | null
+    license?: {
+      licenseKey: string
+      sku: string
+      durationDays: number | null
+      expiresAt: string | null
+      activationLimit: number
+      status: 'inactive' | 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace' | 'invalid_license' | 'network_error'
+      orderId: string
+      buyerId: string
+    } | null
+  }>
 
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>;

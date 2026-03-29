@@ -53,6 +53,8 @@ jspm_packages/
 dist-electron/
 dist-electron-next/
 dist/
+dist-electron-verify/
+.electron-dev/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -171,6 +173,9 @@ release/
 target/
 native-module/target/
 native-module/*.node
+native-module/target-commercial/
+commerce/.env
+commerce/data/
 
 old files
 # Rust build artifacts

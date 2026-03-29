@@ -455,6 +455,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         role?: string;
         totalExperienceYears?: number;
         preferredResumeProjectCount?: number;
+        engineInitialized?: boolean;
+        engineError?: string;
     }>({ hasProfile: false, profileMode: false });
     const [profileUploading, setProfileUploading] = useState(false);
     const [profileApplying, setProfileApplying] = useState(false);
@@ -480,6 +482,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         resumeImportFilePath &&
         resumeImportPreview.projectCount !== resumeProjectCount
     );
+    const isKnowledgeEngineUnavailable = profileStatus.engineInitialized === false;
+    const knowledgeIdentityTitle = isKnowledgeEngineUnavailable
+        ? '知识库引擎未初始化'
+        : (profileData?.identity?.name || '身份节点未激活');
+    const knowledgeIdentitySubtitle = isKnowledgeEngineUnavailable
+        ? (profileStatus.engineError || '本地知识库引擎当前不可用。')
+        : (profileData?.identity?.email || '上传简历后即可创建项目知识库。');
 
     const clearResumeImportPreview = () => {
         setResumeImportPreview(null);
@@ -494,6 +503,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
         if (status) {
             setProfileStatus(status);
+            if (status.engineInitialized === false) {
+                setProfileError(status.engineError || '本地知识库引擎未初始化');
+            } else {
+                setProfileError('');
+            }
         }
 
         setProfileData(data || null);
@@ -521,10 +535,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 setResumeImportFilePath(filePath);
                 setResumeImportPreview(buildResumeImportPreviewDraft(result.preview, existingKnowledgeProjects));
             } else {
-                setProfileError(result?.error || 'Preview failed');
+                setProfileError(result?.error || '\u9884\u89c8\u5931\u8d25');
             }
         } catch (e: any) {
-            setProfileError(e.message || 'Preview failed');
+            setProfileError(e.message || '\u9884\u89c8\u5931\u8d25');
         } finally {
             setProfileUploading(false);
         }
@@ -532,6 +546,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
     const selectAndPreviewResume = async () => {
         setProfileError('');
+        if (profileStatus.engineInitialized === false) {
+            setProfileError(profileStatus.engineError || '本地知识库引擎未初始化');
+            return;
+        }
         const fileResult = await window.electronAPI?.profileSelectFile?.();
         if (fileResult?.cancelled || !fileResult?.filePath) return;
         await runResumeImportPreview(fileResult.filePath);
@@ -552,7 +570,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const applyResumeImportPreview = async () => {
         if (!resumeImportPreview || !resumeImportFilePath) return;
         if (resumePreviewNeedsRefresh) {
-            setProfileError('Refresh the preview after changing the project count.');
+            setProfileError('\u8c03\u6574\u9879\u76ee\u6570\u91cf\u540e\uff0c\u8bf7\u5148\u5237\u65b0\u9884\u89c8\u3002');
             return;
         }
 
@@ -585,6 +603,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                     metrics: parseResumeDraftList(project.metrics),
                     highlights: parseResumeDraftList(project.highlights),
                     keywords: parseResumeDraftList(project.keywords),
+                    sourceExcerpt: project.sourceExcerpt,
                 })),
                 replaceMode: 'confirmed_replace',
             });
@@ -1722,7 +1741,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                         }}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'profile' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
                                     >
-                                        <User size={16} /> Project Library
+                                        <User size={16} /> {"\u9879\u76ee\u77e5\u8bc6\u5e93"}
                                     </button>
 
                                     <button
@@ -2099,11 +2118,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             </div>
                                             <div className="text-[11px] font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-500">
                                                 <CheckCircle size={12} />
-                                                Project Context
+                                                {"\u9879\u76ee\u4e0a\u4e0b\u6587"}
                                             </div>
                                         </div>
                                         <p className="text-xs text-text-secondary mb-2">
-                                            Build a project-scoped knowledge library for interview deep dives.
+                                            {"\u4e3a\u9762\u8bd5\u6df1\u6316\u6784\u5efa\u6309\u9879\u76ee\u7ec4\u7ec7\u7684\u672c\u5730\u77e5\u8bc6\u5e93\u3002"}
                                         </p>
                                     </div>
 
@@ -2117,15 +2136,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     <div className="flex items-center gap-4">
                                                         <div className="w-10 h-10 rounded-full bg-bg-input border border-border-subtle flex items-center justify-center text-text-primary shadow-sm hover:scale-105 transition-transform duration-300">
                                                             <span className="font-bold text-sm tracking-tight">
-                                                                {profileData?.identity?.name ? profileData.identity.name.charAt(0).toUpperCase() : 'U'}
+                                                                {isKnowledgeEngineUnavailable ? '!' : (profileData?.identity?.name ? profileData.identity.name.charAt(0).toUpperCase() : 'U')}
                                                             </span>
                                                         </div>
                                                         <div>
                                                             <h4 className="text-sm font-bold text-text-primary tracking-tight">
-                                                                {profileData?.identity?.name || 'Identity Node Inactive'}
+                                                                {knowledgeIdentityTitle}
                                                             </h4>
                                                             <p className="text-xs text-text-secondary mt-0.5 tracking-wide">
-                                                                {profileData?.identity?.email || 'Upload a resume to create your project library.'}
+                                                                {knowledgeIdentitySubtitle}
                                                             </p>
                                                         </div>
                                                     </div>
@@ -2134,7 +2153,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         {profileStatus.hasProfile && (
                                                             <button
                                                                 onClick={async () => {
-                                                                    if (!confirm('Are you sure you want to delete your mapped persona? This will destroy all structured timeline data.')) return;
+                                                                    if (!confirm('\u786e\u8ba4\u5220\u9664\u5f53\u524d\u5df2\u6620\u5c04\u7684\u8d44\u6599\u5417\uff1f\u8fd9\u4f1a\u6e05\u7a7a\u6240\u6709\u7ed3\u6784\u5316\u65f6\u95f4\u7ebf\u6570\u636e\u3002')) return;
                                                                     try {
                                                                         await window.electronAPI?.profileDelete?.();
                                                                         clearResumeImportPreview();
@@ -2205,7 +2224,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 {profileData?.skills && profileData.skills.length > 0 && (
                                                     <div className="mt-5">
                                                         <div className="text-[10px] font-bold text-text-primary uppercase tracking-wide mb-2">
-                                                            Top Skills
+                                                            {"\u6838\u5fc3\u6280\u80fd"}
                                                         </div>
                                                         <div className="flex flex-wrap gap-1.5">
                                                             {profileData.skills.slice(0, 15).map((skill: string, i: number) => (
@@ -2230,7 +2249,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
                                                     <div className="min-w-0">
                                                         <h4 className="text-sm font-bold text-text-primary mb-0.5 truncate pr-4">
-                                                            {profileStatus.hasProfile ? 'Preview Resume Re-import' : 'Initialize Knowledge Base'}
+                                                            {isKnowledgeEngineUnavailable ? '知识库引擎异常' : (profileStatus.hasProfile ? '预览简历重新导入' : '初始化知识库')}
                                                         </h4>
                                                         {(profileUploading || profileApplying) ? (
                                                             <div className="flex items-center gap-2">
@@ -2241,7 +2260,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             </div>
                                                         ) : (
                                                             <p className="text-xs text-text-secondary truncate pr-4">
-                                                                Select a resume, preview the extracted projects, then confirm the replacement.
+                                                                {isKnowledgeEngineUnavailable
+                                                                    ? (profileStatus.engineError || '本地知识库引擎当前不可用，请先修复数据库依赖。')
+                                                                    : '选择简历后先预览抽取结果，确认无误后再替换写入本地知识库。'}
                                                             </p>
                                                         )}
                                                     </div>
@@ -2249,10 +2270,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                                 <button
                                                     onClick={() => selectAndPreviewResume()}
-                                                    disabled={profileUploading || profileApplying}
-                                                    className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 ${(profileUploading || profileApplying) ? 'bg-bg-input text-text-tertiary cursor-wait border border-border-subtle' : 'bg-text-primary text-bg-main hover:opacity-90 shadow-sm'}`}
+                                                    disabled={profileUploading || profileApplying || isKnowledgeEngineUnavailable}
+                                                    className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 ${(profileUploading || profileApplying || isKnowledgeEngineUnavailable) ? 'bg-bg-input text-text-tertiary cursor-not-allowed border border-border-subtle' : 'bg-text-primary text-bg-main hover:opacity-90 shadow-sm'}`}
                                                 >
-                                                    {profileUploading ? 'Previewing...' : 'Select File'}
+                                                    {profileUploading ? '预览中...' : '选择文件'}
                                                 </button>
                                             </div>
 
@@ -2269,9 +2290,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                     <div className="mt-3 bg-bg-item-surface rounded-xl border border-border-subtle p-5 space-y-5">
                                         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                                             <div>
-                                                <h4 className="text-sm font-bold text-text-primary">Resume Import Controls</h4>
+                                                <h4 className="text-sm font-bold text-text-primary">简历导入控制</h4>
                                                 <p className="text-xs text-text-secondary mt-1">
-                                                    Set the exact project count before previewing. Re-import only writes to the local knowledge base after you confirm the preview below.
+                                                    预览前先设置准确的项目数量。重新导入只有在你确认下方预览后，才会真正写入本地知识库。
                                                 </p>
                                             </div>
 
@@ -2282,7 +2303,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={profileUploading || profileApplying}
                                                         className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap border ${resumePreviewNeedsRefresh ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary'}`}
                                                     >
-                                                        {resumePreviewNeedsRefresh ? 'Refresh Preview' : 'Run Preview Again'}
+                                                        {resumePreviewNeedsRefresh ? '刷新预览' : '重新生成预览'}
                                                     </button>
                                                 )}
                                                 {resumeImportPreview && (
@@ -2291,7 +2312,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={profileUploading || profileApplying || resumePreviewNeedsRefresh}
                                                         className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap ${(profileUploading || profileApplying || resumePreviewNeedsRefresh) ? 'bg-bg-input text-text-tertiary cursor-not-allowed border border-border-subtle' : 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-sm'}`}
                                                     >
-                                                        {profileApplying ? 'Applying...' : 'Confirm Replace'}
+                                                        {profileApplying ? '应用中...' : '确认替换'}
                                                     </button>
                                                 )}
                                                 {resumeImportPreview && (
@@ -2303,7 +2324,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={profileUploading || profileApplying}
                                                         className="px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary"
                                                     >
-                                                        Cancel Preview
+                                                        取消预览
                                                     </button>
                                                 )}
                                             </div>
@@ -2311,7 +2332,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                         <div>
                                             <div className="text-[10px] font-bold text-text-primary uppercase tracking-wide mb-2">
-                                                Target Project Count
+                                                目标项目数量
                                             </div>
                                             <div className="flex flex-wrap gap-2">
                                                 {RESUME_PROJECT_COUNT_OPTIONS.map((count) => (
@@ -2321,7 +2342,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={profileUploading || profileApplying}
                                                         className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${resumeProjectCount === count ? 'bg-text-primary text-bg-main' : 'bg-bg-input border border-border-subtle text-text-secondary hover:text-text-primary'}`}
                                                     >
-                                                        {count} {count === 1 ? 'Project' : 'Projects'}
+                                                        {count} 个项目
                                                     </button>
                                                 ))}
                                             </div>
@@ -2329,19 +2350,19 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                         <div className="rounded-lg border border-border-subtle bg-bg-input px-3 py-3 space-y-2">
                                             <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                                <span className="font-semibold text-text-primary">Selected Resume</span>
+                                                <span className="font-semibold text-text-primary">已选简历</span>
                                                 {resumeImportFilePath ? (
                                                     <span className="text-text-secondary break-all">{resumeImportFilePath}</span>
                                                 ) : (
-                                                    <span className="text-text-tertiary">No file selected yet.</span>
+                                                    <span className="text-text-tertiary">还没有选择文件。</span>
                                                 )}
                                             </div>
                                             <div className="text-[11px] text-text-secondary leading-relaxed">
-                                                Mapping a preview project onto an existing project keeps that project&apos;s ID, manual attachments, and repo index. Only the resume excerpt is replaced.
+                                                把预览项目映射到已有项目时，会保留该项目的 ID、手动附件和 repo 索引，只替换这次简历摘录。
                                             </div>
                                             {resumePreviewNeedsRefresh && (
                                                 <div className="text-[11px] text-amber-500">
-                                                    The target project count changed after the last preview. Run the preview again before confirming the import.
+                                                    目标项目数量在上次预览后发生了变化，请先重新生成预览，再确认导入。
                                                 </div>
                                             )}
                                         </div>
@@ -2350,24 +2371,24 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             <div className="space-y-4">
                                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                                     <div>
-                                                        <h4 className="text-sm font-bold text-text-primary">Resume Import Preview</h4>
+                                                        <h4 className="text-sm font-bold text-text-primary">简历导入预览</h4>
                                                         <p className="text-xs text-text-secondary mt-1">
-                                                            Edit anything that looks wrong, then choose whether each preview project should update an existing project or create a new one.
+                                                            先把不准确的内容改好，再决定每个预览项目是更新已有项目，还是新建项目。
                                                         </p>
                                                     </div>
                                                     <div className="text-[11px] text-text-secondary">
-                                                        {resumeImportPreview.createdAt ? `Preview created ${new Date(resumeImportPreview.createdAt).toLocaleString()}` : `${resumeImportPreview.projects.length} projects ready`}
+                                                        {resumeImportPreview.createdAt ? `预览生成时间：${new Date(resumeImportPreview.createdAt).toLocaleString()}` : `已准备好 ${resumeImportPreview.projects.length} 个项目`}
                                                     </div>
                                                 </div>
 
                                                 <div className="grid md:grid-cols-2 gap-3">
                                                     <div className="rounded-lg border border-border-subtle bg-bg-input px-4 py-3">
-                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">Identity</div>
+                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary">身份信息</div>
                                                         <div className="text-sm font-semibold text-text-primary mt-1">
-                                                            {resumeImportPreview.identity?.name || 'Unnamed Candidate'}
+                                                            {resumeImportPreview.identity?.name || '未识别姓名'}
                                                         </div>
                                                         <div className="text-[11px] text-text-secondary mt-1">
-                                                            {resumeImportPreview.identity?.role || 'Role not detected'}
+                                                            {resumeImportPreview.identity?.role || '未识别角色'}
                                                         </div>
                                                         {resumeImportPreview.identity?.summary && (
                                                             <p className="text-[11px] text-text-secondary mt-2 leading-relaxed">
@@ -2377,7 +2398,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
 
                                                     <div className="rounded-lg border border-border-subtle bg-bg-input px-4 py-3">
-                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">Skills</div>
+                                                        <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">技能</div>
                                                         <div className="flex flex-wrap gap-1.5">
                                                             {(resumeImportPreview.skills || []).slice(0, 18).map((skill: string) => (
                                                                 <span key={skill} className="text-[10px] font-medium text-text-secondary px-2 py-1 rounded-md border border-border-subtle bg-bg-item-surface">
@@ -2385,7 +2406,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 </span>
                                                             ))}
                                                             {(!resumeImportPreview.skills || resumeImportPreview.skills.length === 0) && (
-                                                                <span className="text-[11px] text-text-tertiary">No skills detected from this preview.</span>
+                                                                <span className="text-[11px] text-text-tertiary">这次预览没有识别出技能。</span>
                                                             )}
                                                         </div>
                                                     </div>
@@ -2397,23 +2418,23 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                                                 <div>
                                                                     <div className="text-[10px] uppercase tracking-wide text-text-tertiary">
-                                                                        Preview Project {index + 1}
+                                                                        预览项目 {index + 1}
                                                                     </div>
                                                                     <div className="text-sm font-semibold text-text-primary mt-1">
-                                                                        {project.title || `Project ${index + 1}`}
+                                                                        {project.title || `项目 ${index + 1}`}
                                                                     </div>
                                                                 </div>
 
                                                                 <div className="w-full max-w-[320px]">
                                                                     <label className="text-[10px] uppercase tracking-wide text-text-tertiary block mb-1.5">
-                                                                        Apply To
+                                                                        应用到
                                                                     </label>
                                                                     <select
                                                                         value={project.mappingProjectId}
                                                                         onChange={(event) => updateResumePreviewProject(project.previewId, { mappingProjectId: event.target.value })}
                                                                         className="w-full bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
                                                                     >
-                                                                        <option value="">Create New Project</option>
+                                                                        <option value="">新建项目</option>
                                                                         {existingKnowledgeProjects.map((existingProject: any) => (
                                                                             <option key={existingProject.id} value={existingProject.id}>
                                                                                 {existingProject.title}
@@ -2422,8 +2443,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     </select>
                                                                     <div className="text-[10px] text-text-tertiary mt-1.5">
                                                                         {project.mappingProjectId
-                                                                            ? 'This keeps the current project ID, manual assets, and repo attachments.'
-                                                                            : 'This creates a brand new project card in the local library.'}
+                                                                            ? '会保留当前项目 ID、手动资料和 repo 关联。'
+                                                                            : '会在本地知识库中新建一个项目卡片。'}
                                                                     </div>
                                                                 </div>
                                                             </div>
@@ -2432,74 +2453,76 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                 <input
                                                                     value={project.title}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { title: event.target.value })}
-                                                                    placeholder="Project title"
+                                                                    placeholder="项目标题"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
                                                                 />
                                                                 <input
                                                                     value={project.role}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { role: event.target.value })}
-                                                                    placeholder="Role"
+                                                                    placeholder="担任角色"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
                                                                 />
                                                                 <textarea
                                                                     value={project.summary}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { summary: event.target.value })}
                                                                     rows={3}
-                                                                    placeholder="Summary"
+                                                                    placeholder="项目概述"
                                                                     className="md:col-span-2 bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.responsibilities}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { responsibilities: event.target.value })}
                                                                     rows={4}
-                                                                    placeholder="Responsibilities, one per line"
+                                                                    placeholder="职责内容，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.techStack}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { techStack: event.target.value })}
                                                                     rows={4}
-                                                                    placeholder="Tech stack, one per line"
+                                                                    placeholder="技术栈，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.modules}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { modules: event.target.value })}
                                                                     rows={3}
-                                                                    placeholder="Modules, one per line"
+                                                                    placeholder="模块拆分，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.metrics}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { metrics: event.target.value })}
                                                                     rows={3}
-                                                                    placeholder="Metrics, one per line"
+                                                                    placeholder="指标或结果，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.highlights}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { highlights: event.target.value })}
                                                                     rows={3}
-                                                                    placeholder="Highlights, one per line"
+                                                                    placeholder="亮点内容，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                                 <textarea
                                                                     value={project.keywords}
                                                                     onChange={(event) => updateResumePreviewProject(project.previewId, { keywords: event.target.value })}
                                                                     rows={3}
-                                                                    placeholder="Keywords, one per line"
+                                                                    placeholder="关键词，每行一条"
                                                                     className="bg-bg-item-surface border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
                                                                 />
                                                             </div>
 
-                                                            {project.sourceExcerpt && (
-                                                                <div className="rounded-lg border border-border-subtle bg-bg-item-surface px-3 py-3">
-                                                                    <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">Resume Excerpt</div>
-                                                                    <p className="text-[11px] text-text-secondary leading-relaxed whitespace-pre-wrap">
-                                                                        {project.sourceExcerpt}
-                                                                    </p>
-                                                                </div>
-                                                            )}
+                                                            <div className="rounded-lg border border-border-subtle bg-bg-item-surface px-3 py-3">
+                                                                <div className="text-[10px] uppercase tracking-wide text-text-tertiary mb-2">项目完整内容</div>
+                                                                <textarea
+                                                                    value={project.sourceExcerpt}
+                                                                    onChange={(event) => updateResumePreviewProject(project.previewId, { sourceExcerpt: event.target.value })}
+                                                                    rows={10}
+                                                                    placeholder="这里会保留该项目在简历中的原始内容，你可以在导入前直接修改。"
+                                                                    className="w-full bg-bg-main border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+                                                                />
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -2517,7 +2540,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     </div>
                                                     <div className="min-w-0">
                                                         <h4 className="text-sm font-bold text-text-primary mb-0.5 truncate pr-4">
-                                                            {profileData?.hasActiveJD ? `${profileData.activeJD?.title} @ ${profileData.activeJD?.company}` : 'Upload Job Description'}
+                                                            {profileData?.hasActiveJD ? `${profileData.activeJD?.title} @ ${profileData.activeJD?.company}` : '\u4e0a\u4f20 JD'}
                                                         </h4>
                                                         {jdUploading ? (
                                                             <div className="flex items-center gap-2">
@@ -2529,7 +2552,16 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         ) : profileData?.hasActiveJD ? (
                                                             <div className="flex items-center gap-3">
                                                                 <span className="text-[9px] font-bold text-blue-500 px-1.5 py-0.5 bg-blue-500/10 rounded uppercase tracking-wide border border-blue-500/20">
-                                                                    {profileData.activeJD?.level || 'mid'}-level
+                                                                    {`${({
+                                                                        intern: '\u5b9e\u4e60',
+                                                                        junior: '\u521d\u7ea7',
+                                                                        mid: '\u4e2d\u7ea7',
+                                                                        senior: '\u9ad8\u7ea7',
+                                                                        lead: '\u4e3b\u5bfc',
+                                                                        staff: '\u8d44\u6df1',
+                                                                        principal: '\u9996\u5e2d',
+                                                                        manager: '\u7ba1\u7406',
+                                                                    } as Record<string, string>)[String(profileData.activeJD?.level || 'mid').toLowerCase()] || profileData.activeJD?.level || '\u4e2d\u7ea7'} \u7ea7\u522b`}
                                                                 </span>
                                                                 <div className="flex gap-1.5">
                                                                     {profileData.activeJD?.technologies?.slice(0, 3).map((t: string, i: number) => (
@@ -2539,7 +2571,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             </div>
                                                         ) : (
                                                             <p className="text-xs text-text-secondary">
-                                                            Upload a JD as an optional ranking and wording bias. Facts still come from your project library.
+                                                            {"\u4e0a\u4f20 JD \u53ef\u4f5c\u4e3a\u53ef\u9009\u7684\u6392\u5e8f\u4e0e\u63aa\u8f9e\u504f\u5411\uff0c\u4f46\u4e8b\u5b9e\u4ecd\u7136\u6765\u81ea\u4f60\u7684\u9879\u76ee\u77e5\u8bc6\u5e93\u3002"}
                                                             </p>
                                                         )}
                                                     </div>
@@ -2572,10 +2604,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                                     const data = await window.electronAPI?.profileGetProfile?.();
                                                                     if (data) setProfileData(data);
                                                                 } else {
-                                                                    setJdError(result?.error || 'JD upload failed');
+                                                                    setJdError(result?.error || 'JD \u4e0a\u4f20\u5931\u8d25');
                                                                 }
                                                             } catch (e: any) {
-                                                                setJdError(e.message || 'JD upload failed');
+                                                                setJdError(e.message || 'JD \u4e0a\u4f20\u5931\u8d25');
                                                             } finally {
                                                                 setJdUploading(false);
                                                             }
@@ -2583,7 +2615,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         disabled={jdUploading}
                                                         className={`px-4 py-2 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 ${jdUploading ? 'bg-bg-input text-text-tertiary cursor-wait border border-border-subtle' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-sm'}`}
                                                     >
-                                                        {jdUploading ? 'Parsing...' : profileData?.hasActiveJD ? 'Replace JD' : 'Upload JD'}
+                                                        {jdUploading ? '\u89e3\u6790\u4e2d...' : profileData?.hasActiveJD ? '\u66ff\u6362 JD' : '\u4e0a\u4f20 JD'}
                                                     </button>
                                                 </div>
                                             </div>

@@ -515,7 +515,7 @@ interface ElectronAPI {
     editedProjects?: Array<any>;
     replaceMode: "confirmed_replace";
   }) => Promise<{ success: boolean; projectCount?: number; identity?: any; projects?: any[]; error?: string }>;
-  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number }>;
+  profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number; preferredResumeProjectCount?: number; engineInitialized?: boolean; engineError?: string }>;
   profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   profileDelete: () => Promise<{ success: boolean; error?: string }>;
   profileGetProfile: () => Promise<any>;
@@ -531,6 +531,7 @@ interface ElectronAPI {
   projectLibraryListProjects: () => Promise<any[]>;
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
   projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
+  projectLibraryDeleteProject: (projectId: string) => Promise<{ success: boolean; projects?: any[]; error?: string }>;
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>;
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
   projectLibraryGetProjectDetail: (projectId: string) => Promise<any>;
@@ -1325,6 +1326,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   projectLibraryListProjects: () => ipcRenderer.invoke('projectLibrary:listProjects'),
   projectLibraryUpsertProject: (project: any) => ipcRenderer.invoke('projectLibrary:upsertProject', project),
   projectLibraryUpdateProject: (project: any) => ipcRenderer.invoke('projectLibrary:updateProject', project),
+  projectLibraryDeleteProject: (projectId: string) => ipcRenderer.invoke('projectLibrary:deleteProject', projectId),
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => ipcRenderer.invoke('projectLibrary:attachAssets', payload),
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => ipcRenderer.invoke('projectLibrary:attachRepo', payload),
   projectLibraryGetProjectDetail: (projectId: string) => ipcRenderer.invoke('projectLibrary:getProjectDetail', projectId),
@@ -1355,6 +1357,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   licenseCheckPremium: () => ipcRenderer.invoke('license:check-premium'),
   licenseDeactivate: () => ipcRenderer.invoke('license:deactivate'),
   licenseGetHardwareId: () => ipcRenderer.invoke('license:get-hardware-id'),
+  licenseGetStatus: () => ipcRenderer.invoke('license:get-status'),
 
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => ipcRenderer.invoke('set-overlay-opacity', opacity),

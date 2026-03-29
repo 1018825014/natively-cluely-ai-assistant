@@ -19,7 +19,66 @@ import {
     OpenAICompatibleProviderId,
 } from './LlmProviderProfiles';
 
-const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
+const SECURE_CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'credentials.settings.json');
+const LEGACY_PLAINTEXT_PATH = SECURE_CREDENTIALS_PATH + '.json';
+
+const SECURE_CREDENTIAL_FIELDS: Array<keyof StoredCredentials> = [
+    'geminiApiKey',
+    'groqApiKey',
+    'openaiApiKey',
+    'claudeApiKey',
+    'alibabaLlmApiKey',
+    'groqSttApiKey',
+    'openAiSttApiKey',
+    'deepgramApiKey',
+    'elevenLabsApiKey',
+    'azureApiKey',
+    'ibmWatsonApiKey',
+    'sonioxApiKey',
+    'alibabaSttApiKey',
+    'googleSearchApiKey',
+    'customProviders',
+    'curlProviders',
+];
+
+const PLAIN_CREDENTIAL_FIELDS: Array<keyof StoredCredentials> = [
+    'openaiBaseUrl',
+    'alibabaLlmBaseUrl',
+    'googleServiceAccountPath',
+    'defaultModel',
+    'sttProvider',
+    'groqSttModel',
+    'azureRegion',
+    'ibmWatsonRegion',
+    'technicalGlossaryConfig',
+    'sttLanguage',
+    'aiResponseLanguage',
+    'googleSearchCseId',
+    'geminiPreferredModel',
+    'groqPreferredModel',
+    'openaiPreferredModel',
+    'claudePreferredModel',
+    'alibabaPreferredModel',
+];
+
+function pickCredentialFields(source: StoredCredentials, fields: Array<keyof StoredCredentials>): StoredCredentials {
+    const picked: StoredCredentials = {};
+    for (const field of fields) {
+        const value = source[field];
+        if (value !== undefined) {
+            (picked as any)[field] = value;
+        }
+    }
+    return picked;
+}
+
+function normalizeStoredCredentials(input: StoredCredentials): StoredCredentials {
+    return {
+        ...input,
+        technicalGlossaryConfig: normalizeTechnicalGlossaryConfig(input.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY),
+    };
+}
 
 export interface CustomProvider {
     id: string;
@@ -66,7 +125,7 @@ export interface StoredCredentials {
     // Google Custom Search
     googleSearchApiKey?: string;
     googleSearchCseId?: string;
-    // Dynamic Model Discovery – preferred models per provider
+    // Dynamic model discovery preferred models per provider
     geminiPreferredModel?: string;
     groqPreferredModel?: string;
     openaiPreferredModel?: string;
@@ -242,6 +301,7 @@ export class CredentialsManager {
     public getAiResponseLanguage(): string {
         return this.credentials.aiResponseLanguage || 'English';
     }
+
     public getDefaultModel(): string {
         if (this.credentials.defaultModel?.trim()) {
             return this.credentials.defaultModel;
@@ -414,6 +474,7 @@ export class CredentialsManager {
         this.saveCredentials();
         console.log(`[CredentialsManager] AI Response Language set to: ${language}`);
     }
+
     public setDefaultModel(model: string): void {
         this.credentials.defaultModel = model;
         this.saveCredentials();
@@ -436,7 +497,6 @@ export class CredentialsManager {
         if (!this.credentials.customProviders) {
             this.credentials.customProviders = [];
         }
-        // Check if exists, update if so
         const index = this.credentials.customProviders.findIndex(p => p.id === provider.id);
         if (index !== -1) {
             this.credentials.customProviders[index] = provider;
@@ -481,12 +541,10 @@ export class CredentialsManager {
 
     public clearAll(): void {
         this.scrubMemory();
-        if (fs.existsSync(CREDENTIALS_PATH)) {
-            fs.unlinkSync(CREDENTIALS_PATH);
-        }
-        const plaintextPath = CREDENTIALS_PATH + '.json';
-        if (fs.existsSync(plaintextPath)) {
-            fs.unlinkSync(plaintextPath);
+        for (const filePath of [SECURE_CREDENTIALS_PATH, SETTINGS_PATH, LEGACY_PLAINTEXT_PATH]) {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
         }
         console.log('[CredentialsManager] All credentials cleared');
     }
@@ -496,7 +554,6 @@ export class CredentialsManager {
      * Called on app quit and credential clear.
      */
     public scrubMemory(): void {
-        // Overwrite each string field with empty before discarding
         for (const key of Object.keys(this.credentials) as (keyof StoredCredentials)[]) {
             const val = this.credentials[key];
             if (typeof val === 'string') {
@@ -512,95 +569,103 @@ export class CredentialsManager {
     // =========================================================================
 
     private saveCredentials(): void {
-        try {
+        const securePayload = pickCredentialFields(this.credentials, SECURE_CREDENTIAL_FIELDS);
+        const plainPayload = pickCredentialFields(this.credentials, PLAIN_CREDENTIAL_FIELDS);
+
+        if (Object.keys(plainPayload).length > 0) {
+            const tmpPlain = SETTINGS_PATH + '.tmp';
+            fs.writeFileSync(tmpPlain, JSON.stringify(plainPayload));
+            fs.renameSync(tmpPlain, SETTINGS_PATH);
+        } else if (fs.existsSync(SETTINGS_PATH)) {
+            fs.unlinkSync(SETTINGS_PATH);
+        }
+
+        if (Object.keys(securePayload).length > 0) {
             if (!safeStorage.isEncryptionAvailable()) {
-                console.warn('[CredentialsManager] Encryption not available, falling back to plaintext');
-                // Fallback: save as plaintext (less secure, but functional)
-                const plainPath = CREDENTIALS_PATH + '.json';
-                const tmpPlain = plainPath + '.tmp';
-                fs.writeFileSync(tmpPlain, JSON.stringify(this.credentials));
-                fs.renameSync(tmpPlain, plainPath);
-                return;
+                throw new Error('当前系统安全存储不可用，无法保存 API Key 或其他敏感凭证。');
             }
 
-            const data = JSON.stringify(this.credentials);
-            const encrypted = safeStorage.encryptString(data);
-            const tmpEnc = CREDENTIALS_PATH + '.tmp';
+            const encrypted = safeStorage.encryptString(JSON.stringify(securePayload));
+            const tmpEnc = SECURE_CREDENTIALS_PATH + '.tmp';
             fs.writeFileSync(tmpEnc, encrypted);
-            fs.renameSync(tmpEnc, CREDENTIALS_PATH);
-        } catch (error) {
-            console.error('[CredentialsManager] Failed to save credentials:', error);
+            fs.renameSync(tmpEnc, SECURE_CREDENTIALS_PATH);
+        } else if (fs.existsSync(SECURE_CREDENTIALS_PATH)) {
+            fs.unlinkSync(SECURE_CREDENTIALS_PATH);
+        }
+
+        if (fs.existsSync(LEGACY_PLAINTEXT_PATH)) {
+            fs.unlinkSync(LEGACY_PLAINTEXT_PATH);
         }
     }
 
     private loadCredentials(): void {
         try {
-            // Try encrypted file first
-            if (fs.existsSync(CREDENTIALS_PATH)) {
-                if (!safeStorage.isEncryptionAvailable()) {
-                    console.warn('[CredentialsManager] Encryption not available for load');
-                    return;
-                }
+            let securePayload: StoredCredentials = {};
+            let plainPayload: StoredCredentials = {};
+            let legacyPayload: StoredCredentials = {};
 
-                const encrypted = fs.readFileSync(CREDENTIALS_PATH);
-                const decrypted = safeStorage.decryptString(encrypted);
-                try {
+            if (fs.existsSync(SECURE_CREDENTIALS_PATH)) {
+                if (safeStorage.isEncryptionAvailable()) {
+                    const encrypted = fs.readFileSync(SECURE_CREDENTIALS_PATH);
+                    const decrypted = safeStorage.decryptString(encrypted);
                     const parsed = JSON.parse(decrypted);
                     if (typeof parsed === 'object' && parsed !== null) {
-                        this.credentials = parsed;
-                        this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(
-                            this.credentials.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY
-                        );
+                        securePayload = parsed;
                         console.log('[CredentialsManager] Loaded encrypted credentials');
-                    } else {
-                        throw new Error('Decrypted credentials is not a valid object');
                     }
-                } catch (parseError) {
-                    console.error('[CredentialsManager] Failed to parse decrypted credentials — file may be corrupted. Starting fresh:', parseError);
-                    this.credentials = {};
+                } else {
+                    console.warn('[CredentialsManager] Secure credential file exists, but system secure storage is unavailable. Sensitive fields were not loaded.');
                 }
-
-                // Clean up any leftover plaintext fallback file to eliminate the data leak
-                const plaintextPath = CREDENTIALS_PATH + '.json';
-                if (fs.existsSync(plaintextPath)) {
-                    try {
-                        fs.unlinkSync(plaintextPath);
-                        console.log('[CredentialsManager] Removed stale plaintext credential file');
-                    } catch (cleanupErr) {
-                        console.warn('[CredentialsManager] Could not remove stale plaintext file:', cleanupErr);
-                    }
-                }
-                return;
             }
 
-            // Fallback: try plaintext file
-            const plaintextPath = CREDENTIALS_PATH + '.json';
-            if (fs.existsSync(plaintextPath)) {
-                const data = fs.readFileSync(plaintextPath, 'utf-8');
-                try {
-                    const parsed = JSON.parse(data);
-                    if (typeof parsed === 'object' && parsed !== null) {
-                        this.credentials = parsed;
-                        this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(
-                            this.credentials.technicalGlossaryConfig || DEFAULT_TECHNICAL_GLOSSARY
-                        );
-                        console.log('[CredentialsManager] Loaded plaintext credentials');
-                    } else {
-                        throw new Error('Plaintext credentials is not a valid object');
-                    }
-                } catch (parseError) {
-                    console.error('[CredentialsManager] Failed to parse plaintext credentials — file may be corrupted. Starting fresh:', parseError);
-                    this.credentials = {};
+            if (fs.existsSync(SETTINGS_PATH)) {
+                const parsed = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
+                if (typeof parsed === 'object' && parsed !== null) {
+                    plainPayload = parsed;
+                    console.log('[CredentialsManager] Loaded plaintext settings');
                 }
-                return;
             }
 
-            console.log('[CredentialsManager] No stored credentials found');
-            this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(DEFAULT_TECHNICAL_GLOSSARY);
+            if (fs.existsSync(LEGACY_PLAINTEXT_PATH)) {
+                const parsed = JSON.parse(fs.readFileSync(LEGACY_PLAINTEXT_PATH, 'utf-8'));
+                if (typeof parsed === 'object' && parsed !== null) {
+                    legacyPayload = parsed;
+                    console.warn('[CredentialsManager] Detected legacy plaintext credential file. Attempting migration.');
+                }
+            }
+
+            const legacyPlain = pickCredentialFields(legacyPayload, PLAIN_CREDENTIAL_FIELDS);
+            const legacySecure = pickCredentialFields(legacyPayload, SECURE_CREDENTIAL_FIELDS);
+
+            this.credentials = normalizeStoredCredentials({
+                ...legacyPlain,
+                ...plainPayload,
+                ...legacySecure,
+                ...securePayload,
+            });
+
+            if (fs.existsSync(LEGACY_PLAINTEXT_PATH)) {
+                if (safeStorage.isEncryptionAvailable()) {
+                    this.saveCredentials();
+                    fs.unlinkSync(LEGACY_PLAINTEXT_PATH);
+                    console.log('[CredentialsManager] Migrated legacy plaintext credentials into split storage');
+                } else {
+                    this.credentials = normalizeStoredCredentials({
+                        ...legacyPlain,
+                        ...plainPayload,
+                        ...securePayload,
+                    });
+                    console.warn('[CredentialsManager] Legacy plaintext file still exists, but sensitive fields were ignored because secure storage is unavailable.');
+                }
+            }
+
+            if (Object.keys(this.credentials).length === 0) {
+                console.log('[CredentialsManager] No stored credentials found');
+                this.credentials = normalizeStoredCredentials({});
+            }
         } catch (error) {
             console.error('[CredentialsManager] Failed to load credentials:', error);
-            this.credentials = {};
-            this.credentials.technicalGlossaryConfig = normalizeTechnicalGlossaryConfig(DEFAULT_TECHNICAL_GLOSSARY);
+            this.credentials = normalizeStoredCredentials({});
         }
     }
 }

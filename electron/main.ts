@@ -96,6 +96,7 @@ try {
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
 import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
+import { getCommercialConfig } from "./services/CommercialConfig"
 import { OllamaManager } from './services/OllamaManager'
 import { PromptLabService } from "./services/PromptLabService"
 import { PromptLabActionId } from "./services/PromptOverrideManager"
@@ -162,6 +163,8 @@ export class AppState {
   private themeManager: ThemeManager
   private ragManager: RAGManager | null = null
   private knowledgeOrchestrator: any = null
+  private ragInitializationError: string | null = null
+  private knowledgeInitializationError: string | null = null
   private tray: Tray | null = null
   private updateAvailable: boolean = false
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
@@ -455,9 +458,14 @@ export class AppState {
             ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434'
         });
         this.ragManager.setLLMHelper(this.processingHelper.getLLMHelper());
+        this.ragInitializationError = null;
         console.log('[AppState] RAGManager initialized');
+      } else {
+        this.ragInitializationError = this.describeKnowledgeEngineFailure(new Error('Local database is unavailable.'));
+        console.error('[AppState] Failed to initialize RAGManager:', this.ragInitializationError);
       }
     } catch (error) {
+      this.ragInitializationError = this.describeKnowledgeEngineFailure(error);
       console.error('[AppState] Failed to initialize RAGManager:', error);
     }
 
@@ -503,84 +511,55 @@ export class AppState {
         // Attach KnowledgeOrchestrator to LLMHelper
         llmHelper.setKnowledgeOrchestrator(this.knowledgeOrchestrator);
 
+        this.knowledgeInitializationError = null;
         console.log('[AppState] KnowledgeOrchestrator initialized');
+      } else {
+        this.knowledgeInitializationError = this.describeKnowledgeEngineFailure(new Error('Local database is unavailable.'));
+        console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', this.knowledgeInitializationError);
       }
     } catch (error) {
+      this.knowledgeInitializationError = this.describeKnowledgeEngineFailure(error);
       console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
     }
   }
 
+  private describeKnowledgeEngineFailure(error: unknown): string {
+    const rawMessage = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+
+    if (
+      rawMessage.includes('better_sqlite3.node')
+      && rawMessage.includes('compiled against a different Node.js version')
+    ) {
+      return '本地知识库数据库驱动未能加载：better-sqlite3 与当前 Electron 版本不兼容。请关闭正在运行的应用后执行 npm install，或执行 npx electron-rebuild -f -o better-sqlite3。';
+    }
+
+    if (rawMessage.includes('Local database is unavailable')) {
+      return '本地知识库数据库当前不可用，知识库引擎未能初始化。请检查运行日志或重新安装依赖。';
+    }
+
+    return `本地知识库引擎初始化失败：${rawMessage}`;
+  }
+
   private setupAutoUpdater(): void {
-    autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = false  // Manual install only via button
-
-    autoUpdater.on("checking-for-update", () => {
-      console.log("[AutoUpdater] Checking for update...")
-      this.broadcast("update-checking")
-    })
-
-    autoUpdater.on("update-available", async (info) => {
-      console.log("[AutoUpdater] Update available:", info.version)
-      this.updateAvailable = true
-
-      // Fetch structured release notes
-      const releaseManager = ReleaseNotesManager.getInstance();
-      const notes = await releaseManager.fetchReleaseNotes(info.version);
-
-      // Notify renderer that an update is available with parsed notes if available
-      this.broadcast("update-available", {
-        ...info,
-        parsedNotes: notes
-      })
-    })
-
-    autoUpdater.on("update-not-available", (info) => {
-      console.log("[AutoUpdater] Update not available:", info.version)
-      this.broadcast("update-not-available", info)
-    })
-
-    autoUpdater.on("error", (err) => {
-      console.error("[AutoUpdater] Error:", err)
-      this.broadcast("update-error", err.message)
-    })
-
-    autoUpdater.on("download-progress", (progressObj) => {
-      let log_message = "Download speed: " + progressObj.bytesPerSecond
-      log_message = log_message + " - Downloaded " + progressObj.percent + "%"
-      log_message = log_message + " (" + progressObj.transferred + "/" + progressObj.total + ")"
-      console.log("[AutoUpdater] " + log_message)
-      this.broadcast("download-progress", progressObj)
-    })
-
-    autoUpdater.on("update-downloaded", (info) => {
-      console.log("[AutoUpdater] Update downloaded:", info.version)
-      // Notify renderer that update is ready to install
-      this.broadcast("update-downloaded", info)
-    })
-
-    // Start checking for updates with a 10-second delay
+    // China-first distribution uses a self-hosted download page instead of
+    // GitHub/electron-updater release feeds.
     setTimeout(() => {
-      if (process.env.NODE_ENV === "development") {
-        console.log("[AutoUpdater] Development mode: Running manual update check...");
-        this.checkForUpdatesManual();
-      } else {
-        autoUpdater.checkForUpdatesAndNotify().catch(err => {
-          console.error("[AutoUpdater] Failed to check for updates:", err);
-        });
-      }
+      this.checkForUpdatesManual().catch(err => {
+        console.error("[AutoUpdater] Failed to check for updates:", err);
+      });
     }, 10000);
   }
 
   private async checkForUpdatesManual(): Promise<void> {
     try {
-      console.log('[AutoUpdater] Checking for updates manually via GitHub API...');
+      console.log('[AutoUpdater] Checking for updates via configured update feed...');
+      this.broadcast("update-checking")
       const releaseManager = ReleaseNotesManager.getInstance();
-      // Fetch latest release
       const notes = await releaseManager.fetchReleaseNotes('latest');
 
       if (notes) {
         const currentVersion = app.getVersion();
-        const latestVersionTag = notes.version; // e.g., "v1.2.0" or "1.2.0"
+        const latestVersionTag = notes.version;
         const latestVersion = latestVersionTag.replace(/^v/, '');
 
         console.log(`[AutoUpdater] Manual Check: Current=${currentVersion}, Latest=${latestVersion}`);
@@ -596,7 +575,8 @@ export class AppState {
             path: '',
             sha512: '',
             releaseName: notes.summary,
-            releaseNotes: notes.fullBody
+            releaseNotes: notes.fullBody,
+            downloadUrl: notes.downloadUrl || notes.url
           };
 
           // Notify renderer
@@ -608,9 +588,12 @@ export class AppState {
           console.log('[AutoUpdater] Manual Check: App is up to date.');
           this.broadcast("update-not-available", { version: currentVersion });
         }
+      } else {
+        this.broadcast("update-error", "无法读取更新清单。")
       }
     } catch (err) {
       console.error('[AutoUpdater] Manual update check failed:', err);
+      this.broadcast("update-error", err instanceof Error ? err.message : '更新检查失败');
     }
   }
 
@@ -773,61 +756,27 @@ export class AppState {
   }
 
   public async quitAndInstallUpdate(): Promise<void> {
-    console.log('[AutoUpdater] quitAndInstall called - applying update...')
-
-    if (this.installUpdatePromise) {
-      return this.installUpdatePromise;
-    }
-
-    this.isQuitRequested = true;
-
-    this.installUpdatePromise = (async () => {
-      await this.prepareForQuit('install-update');
-      this.allowNativeQuit = true;
-
-      // On macOS, unsigned apps can't auto-restart via quitAndInstall
-      // Workaround: Open the folder containing the downloaded update so user can install manually
-      if (process.platform === 'darwin') {
-        try {
-          // Get the downloaded update file path (e.g., .../Natively-1.0.9-mac.zip)
-          const updateFile = (autoUpdater as any).downloadedUpdateHelper?.file
-          console.log('[AutoUpdater] Downloaded update file:', updateFile)
-
-          if (updateFile) {
-            const updateDir = path.dirname(updateFile)
-            // Open the directory containing the update in Finder
-            await shell.openPath(updateDir)
-            console.log('[AutoUpdater] Opened update directory:', updateDir)
-
-            // Quit the app so user can install new version
-            setTimeout(() => app.quit(), 1000)
-            return
-          }
-        } catch (err) {
-          console.error('[AutoUpdater] Failed to open update directory:', err)
-        }
-      }
-
-      // Fallback to standard quitAndInstall (works on Windows/Linux or if signed)
-      setImmediate(() => {
-        try {
-          autoUpdater.quitAndInstall(false, true)
-        } catch (err) {
-          console.error('[AutoUpdater] quitAndInstall failed:', err)
-          app.exit(0)
-        }
-      })
-    })();
-
-    return this.installUpdatePromise;
+    console.log('[AutoUpdater] Opening download page instead of auto-install flow')
+    await shell.openExternal(getCommercialConfig().downloadUrl)
   }
 
   public async checkForUpdates(): Promise<void> {
-    await autoUpdater.checkForUpdatesAndNotify()
+    await this.checkForUpdatesManual()
   }
 
-  public downloadUpdate(): void {
-    autoUpdater.downloadUpdate()
+  public async downloadUpdate(): Promise<void> {
+    const notes = ReleaseNotesManager.getInstance().getCachedNotes()
+    const downloadUrl = notes?.downloadUrl || notes?.url || getCommercialConfig().downloadUrl
+    /*
+      console.error('[AutoUpdater] Failed to open download URL:', err)
+      this.broadcast('update-error', '无法打开下载页')
+    */
+    try {
+      await shell.openExternal(downloadUrl)
+    } catch (err) {
+      console.error('[AutoUpdater] Failed to open download URL:', err)
+      this.broadcast('update-error', 'Unable to open download page')
+    }
   }
 
   // New Property for System Audio & Microphone
@@ -845,6 +794,7 @@ export class AppState {
     interviewer: new Map(),
     user: new Map(),
   };
+  private hostedSttTokenListener: ((lease: { token: string }) => void) | null = null;
 
   private getConfiguredSttProviderId(): ConfiguredSttProviderId {
     return CredentialsManager.getInstance().getSttProvider();
@@ -1103,6 +1053,7 @@ export class AppState {
 
   private resolveSttProviderId(providerId: ConfiguredSttProviderId): ConfiguredSttProviderId {
     const credentialsManager = CredentialsManager.getInstance();
+    const hostedAlibabaToken = this.getHostedAlibabaSttToken();
 
     switch (providerId) {
       case 'deepgram':
@@ -1114,7 +1065,7 @@ export class AppState {
       case 'openai':
         return credentialsManager.getOpenAiSttApiKey() ? 'openai' : 'google';
       case 'alibaba':
-        return credentialsManager.getAlibabaSttApiKey() ? 'alibaba' : 'google';
+        return credentialsManager.getAlibabaSttApiKey() || hostedAlibabaToken ? 'alibaba' : 'google';
       case 'groq':
         return credentialsManager.getGroqSttApiKey() ? 'groq' : 'google';
       case 'azure':
@@ -1131,6 +1082,7 @@ export class AppState {
     speaker: 'interviewer' | 'user'
   ): STTProvider {
     const credentialsManager = CredentialsManager.getInstance();
+    const hostedAlibabaToken = this.getHostedAlibabaSttToken();
     let stt: STTProvider;
 
     if (providerId === 'deepgram') {
@@ -1170,7 +1122,7 @@ export class AppState {
         stt = new GoogleSTT();
       }
     } else if (providerId === 'alibaba') {
-      const apiKey = credentialsManager.getAlibabaSttApiKey();
+      const apiKey = credentialsManager.getAlibabaSttApiKey() || hostedAlibabaToken;
       if (apiKey) {
         console.log(`[Main] Using AlibabaParaformerSTT for ${speaker}`);
         stt = new AlibabaParaformerSTT(apiKey);
@@ -1179,7 +1131,7 @@ export class AppState {
         stt = new GoogleSTT();
       }
     } else if (providerId === 'funasr') {
-      const apiKey = credentialsManager.getAlibabaSttApiKey();
+      const apiKey = credentialsManager.getAlibabaSttApiKey() || hostedAlibabaToken;
       if (apiKey) {
         console.log(`[Main] Using FunASRRealtimeSTT for ${speaker}`);
         stt = new FunASRRealtimeSTT(apiKey);
@@ -1216,6 +1168,47 @@ export class AppState {
 
     this.applySharedSttConfig(stt, speaker);
     return stt;
+  }
+
+  private getHostedSessionManager(): any | null {
+    try {
+      return require('../premium/electron/services/HostedSessionManager').HostedSessionManager.getInstance();
+    } catch {
+      return null;
+    }
+  }
+
+  private getHostedAlibabaSttToken(): string | null {
+    const hostedSessionManager = this.getHostedSessionManager();
+    return hostedSessionManager?.getCachedAlibabaSttToken?.() || null;
+  }
+
+  private bindHostedSttTokenUpdates(): void {
+    const hostedSessionManager = this.getHostedSessionManager();
+    if (!hostedSessionManager) {
+      return;
+    }
+
+    this.unbindHostedSttTokenUpdates(false);
+    this.hostedSttTokenListener = (lease: { token: string }) => {
+      for (const stt of [this.googleSTT, this.googleSTT_User]) {
+        if (stt && typeof (stt as any).setApiKey === 'function') {
+          (stt as any).setApiKey(lease.token);
+        }
+      }
+    };
+    hostedSessionManager.on('alibaba-stt-token', this.hostedSttTokenListener);
+  }
+
+  private unbindHostedSttTokenUpdates(clearLease: boolean): void {
+    const hostedSessionManager = this.getHostedSessionManager();
+    if (hostedSessionManager && this.hostedSttTokenListener) {
+      hostedSessionManager.off('alibaba-stt-token', this.hostedSttTokenListener);
+    }
+    this.hostedSttTokenListener = null;
+    if (clearLease) {
+      hostedSessionManager?.clearAlibabaSttLease?.();
+    }
   }
 
   private applySharedSttConfig(stt: STTProvider, speaker: 'interviewer' | 'user'): void {
@@ -1761,6 +1754,14 @@ export class AppState {
   public async reconfigureSttProvider(): Promise<void> {
     console.log('[Main] Reconfiguring STT Provider...');
 
+    if (this.getConfiguredSttProviderId() === 'alibaba' && !CredentialsManager.getInstance().getAlibabaSttApiKey()) {
+      try {
+        await this.getHostedSessionManager()?.prepareForMeeting?.();
+      } catch (error) {
+        console.warn('[Main] Failed to prefetch hosted Alibaba STT token during reconfigure:', error);
+      }
+    }
+
     // Stop existing STT instances
     if (this.googleSTT) {
       this.googleSTT.stop();
@@ -1775,6 +1776,7 @@ export class AppState {
 
     // Reinitialize the pipeline (will pick up the new provider from CredentialsManager)
     this.setupSystemAudioPipeline();
+    this.bindHostedSttTokenUpdates();
 
     // Start the new STT instances if a meeting is active
     if (this.isMeetingActive) {
@@ -1862,6 +1864,13 @@ export class AppState {
     // setTimeout(100) ensures setWindowMode IPC is processed first.
     setTimeout(async () => {
       try {
+        if (this.getConfiguredSttProviderId() === 'alibaba' && !CredentialsManager.getInstance().getAlibabaSttApiKey()) {
+          const lease = await this.getHostedSessionManager()?.prepareForMeeting?.();
+          if (!lease) {
+            throw new Error('未能获取阿里云百炼临时密钥，请检查许可证状态、托管额度或服务端配置。');
+          }
+        }
+
         // Check for audio configuration preference
         if (metadata?.audio) {
           await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
@@ -1869,6 +1878,7 @@ export class AppState {
 
         // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
         this.setupSystemAudioPipeline();
+        this.bindHostedSttTokenUpdates();
 
         // Start System Audio
         this.systemAudioCapture?.start();
@@ -1912,6 +1922,7 @@ export class AppState {
     // 4. Stop Microphone
     this.microphoneCapture?.stop();
     this.googleSTT_User?.stop();
+    this.unbindHostedSttTokenUpdates(true);
     this.stopCompareShadowProviders();
     if (this.sttCompareRecorder.isActive()) {
       this.sttCompareRecorder.stop();
@@ -2292,6 +2303,10 @@ export class AppState {
 
   public getKnowledgeOrchestrator(): any {
     return this.knowledgeOrchestrator;
+  }
+
+  public getKnowledgeEngineError(): string | null {
+    return this.knowledgeInitializationError || this.ragInitializationError;
   }
 
   public getView(): "queue" | "solutions" {
@@ -2959,6 +2974,14 @@ async function initializeApp() {
 
   // Explicitly load credentials into helpers
   appState.processingHelper.loadStoredCredentials();
+
+  try {
+    const hostedSessionManager = require('../premium/electron/services/HostedSessionManager').HostedSessionManager.getInstance();
+    hostedSessionManager.attachLLMHelper(appState.processingHelper.getLLMHelper());
+    await hostedSessionManager.refreshFromLicense(false);
+  } catch (error) {
+    console.warn('[Main] Hosted session bootstrap skipped:', error);
+  }
 
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)

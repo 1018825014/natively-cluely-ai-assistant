@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
+import { commercialConfig } from '../../config/commercial';
 
 interface CustomProvider {
     id: string;
@@ -123,6 +124,7 @@ export const AIProvidersSettings: React.FC = () => {
     // --- Default Model ---
     const [defaultModel, setDefaultModel] = useState<string>('gemini-3.1-flash-lite-preview');
     const [fastResponseMode, setFastResponseMode] = useState(false);
+    const [showAdvancedProviders, setShowAdvancedProviders] = useState(!commercialConfig.hideByok);
 
     // --- Dynamic Model Discovery ---
     const [preferredModels, setPreferredModels] = useState<Record<string, string>>({});
@@ -634,7 +636,37 @@ export const AIProvidersSettings: React.FC = () => {
                 </div>
             </div>
 
+            {commercialConfig.hostedEnabled && (
+                <div className="space-y-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <h3 className="text-sm font-bold text-text-primary mb-1">托管模式</h3>
+                            <p className="text-xs text-text-secondary leading-6">
+                                激活许可证后，文本和截图理解会默认走你的托管网关。新用户不需要自己准备上游 API Key。
+                            </p>
+                        </div>
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-400">
+                            默认开启
+                        </span>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-item-surface px-4 py-3 text-[11px] text-text-secondary leading-6">
+                        网关地址：<span className="font-mono text-text-primary">{commercialConfig.hostedGatewayBaseUrl}</span>
+                        <br />
+                        只有在你需要 BYOK 或排查问题时，才需要展开下面的高级配置。
+                    </div>
+                    {commercialConfig.hideByok && !showAdvancedProviders && (
+                        <button
+                            onClick={() => setShowAdvancedProviders(true)}
+                            className="w-fit rounded-xl border border-border-subtle bg-bg-item-surface px-4 py-2 text-xs font-medium text-text-primary transition-colors hover:bg-bg-input"
+                        >
+                            显示高级 BYOK / 中转配置
+                        </button>
+                    )}
+                </div>
+            )}
+
             {/* Cloud Providers */}
+            {showAdvancedProviders && (
             <div className="space-y-5">
                 <div>
                     <h3 className="text-sm font-bold text-text-primary mb-1">云端提供商</h3>
@@ -752,6 +784,7 @@ export const AIProvidersSettings: React.FC = () => {
 
                 </div>
             </div>
+            )}
 
             {/* Local (Ollama) Providers */}
             <div className="space-y-5">
@@ -834,6 +867,7 @@ export const AIProvidersSettings: React.FC = () => {
             </div>
 
             {/* Custom Providers */}
+            {showAdvancedProviders && (
             <div className="space-y-5">
                 <div className="flex items-center justify-between mb-2">
                     <div>
@@ -1082,6 +1116,7 @@ export const AIProvidersSettings: React.FC = () => {
                     </div>
                 )}
             </div>
+            )}
         </div>
     );
 };

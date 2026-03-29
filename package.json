@@ -9,7 +9,7 @@
     "dev:renderer": "vite --strictPort --port 5180",
     "build": "npm run clean && tsc && vite build",
     "preview": "vite preview",
-    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
+    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && npm run rebuild:electron-native && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
     "electron:dev": "node scripts/run-electron-dev.cjs",
     "electron:build": "tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "app:dev": "node scripts/run-app-dev.cjs",
@@ -17,18 +17,24 @@
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
-    "build:native": "node scripts/build-native.js"
+    "build:native": "node scripts/build-native.js",
+    "rebuild:electron-native": "electron-rebuild -f -o better-sqlite3",
+    "commerce:server": "node commerce/server.js",
+    "test:commerce": "node --test commerce/server.test.js"
   },
   "build": {
     "appId": "com.electron.meeting-notes",
     "afterPack": "./scripts/ad-hoc-sign.js",
-    "productName": "Natively",
+    "productName": "面试岸",
     "files": [
       "dist",
       "dist-electron",
       "package.json",
       "node_modules",
       "!**/native-module/target",
+      "!**/native-module/target/**",
+      "!**/native-module/target-commercial",
+      "!**/native-module/target-commercial/**",
       "!**/native-module/src",
       "!**/native-module/.cargo"
     ],
@@ -118,15 +124,7 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "evinjohnn",
-        "repo": "natively-cluely-ai-assistant",
-        "releaseType": "release"
-      }
-    ]
+    }
   },
   "keywords": [],
   "author": "",

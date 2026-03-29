@@ -55,6 +55,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     ...(config?.preferredModel?.trim() ? { preferredModel: config.preferredModel.trim() } : {}),
   });
 
+  const getKnowledgeEngineUnavailableError = () => (
+    appState.getKnowledgeEngineError()
+    || '本地知识库引擎未初始化，请检查数据库和原生依赖是否可用。'
+  );
+
   ipcMain.removeAllListeners("runtime-log:renderer-report");
   ipcMain.on("runtime-log:renderer-report", (_event, payload) => {
     runtimeLogger.captureRendererReport(payload);
@@ -546,7 +551,17 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("license:activate", async (event, key: string) => {
     try {
       const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      return await LicenseManager.getInstance().activateLicense(key);
+      const result = await LicenseManager.getInstance().activateLicense(key);
+      if (result.success) {
+        try {
+          const hostedSessionManager = require('../premium/electron/services/HostedSessionManager').HostedSessionManager.getInstance();
+          hostedSessionManager.attachLLMHelper(appState.processingHelper.getLLMHelper());
+          await hostedSessionManager.refreshFromLicense(true);
+        } catch (hostedError) {
+          console.warn('[IPC] Hosted session refresh after activation failed:', hostedError);
+        }
+      }
+      return result;
     } catch (err: any) {
       // Only show generic message if the premium module itself is missing.
       // activateLicense() returns {success:false, error} for all expected failures
@@ -566,7 +581,13 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("license:deactivate", async () => {
     try {
       const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      LicenseManager.getInstance().deactivate();
+      await LicenseManager.getInstance().deactivate();
+      try {
+        const hostedSessionManager = require('../premium/electron/services/HostedSessionManager').HostedSessionManager.getInstance();
+        hostedSessionManager.clearSession();
+      } catch (hostedError) {
+        console.warn('[IPC] Hosted session clear after deactivation failed:', hostedError);
+      }
       // Auto-disable knowledge mode when license is removed
       try {
         const orchestrator = appState.getKnowledgeOrchestrator();
@@ -584,6 +605,20 @@ export function initializeIpcHandlers(appState: AppState): void {
       return LicenseManager.getInstance().getHardwareId();
     } catch {
       return 'unavailable';
+    }
+  });
+  safeHandle("license:get-status", async () => {
+    try {
+      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
+      return await LicenseManager.getInstance().getLicenseStatus(true);
+    } catch {
+      return {
+        success: true,
+        status: 'inactive',
+        isPremium: false,
+        entitlement: null,
+        license: null,
+      };
     }
   });
 
@@ -2904,7 +2939,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.previewResumeImport(payload);
     } catch (error: any) {
@@ -2923,7 +2958,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.applyResumeImport(payload);
     } catch (error: any) {
@@ -2937,7 +2972,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       console.log(`[IPC] profile:upload-resume called with: ${filePath}`);
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const result = await orchestrator.ingestDocument(filePath, DocType.RESUME);
       return result;
@@ -2951,7 +2986,12 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { hasProfile: false, profileMode: false };
+        return {
+          hasProfile: false,
+          profileMode: false,
+          engineInitialized: false,
+          engineError: getKnowledgeEngineUnavailableError(),
+        };
       }
       // Map new KnowledgeStatus back to legacy UI shape temporarily
       const status = orchestrator.getStatus();
@@ -2962,9 +3002,15 @@ export function initializeIpcHandlers(appState: AppState): void {
         role: status.resumeSummary?.role,
         totalExperienceYears: status.resumeSummary?.totalExperienceYears,
         preferredResumeProjectCount: status.preferredResumeProjectCount,
+        engineInitialized: true,
       };
     } catch (error: any) {
-      return { hasProfile: false, profileMode: false };
+      return {
+        hasProfile: false,
+        profileMode: false,
+        engineInitialized: false,
+        engineError: getKnowledgeEngineUnavailableError(),
+      };
     }
   });
 
@@ -2972,7 +3018,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       orchestrator.setKnowledgeMode(enabled);
       return { success: true };
@@ -2985,7 +3031,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       orchestrator.deleteDocumentsByType(DocType.RESUME);
       return { success: true };
@@ -3032,7 +3078,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       console.log(`[IPC] profile:upload-jd called with: ${filePath}`);
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const result = await orchestrator.ingestDocument(filePath, DocType.JD);
       return result;
@@ -3046,7 +3092,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       orchestrator.deleteDocumentsByType(DocType.JD);
       return { success: true };
@@ -3079,7 +3125,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const saved = orchestrator.upsertProject(project);
       return { success: true, project: saved };
@@ -3092,9 +3138,21 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return orchestrator.updateProject(project);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:deleteProject", async (_, projectId: string) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
+      }
+      return await orchestrator.deleteProject(projectId);
     } catch (error: any) {
       return { success: false, error: error.message };
     }
@@ -3104,7 +3162,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.attachAssets(projectId, filePaths);
     } catch (error: any) {
@@ -3116,7 +3174,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.attachRepo(projectId, repoPath);
     } catch (error: any) {
@@ -3140,7 +3198,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.updateAssetText(payload.assetId, payload.rawText);
     } catch (error: any) {
@@ -3152,7 +3210,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return orchestrator.deleteAsset(assetId);
     } catch (error: any) {
@@ -3170,7 +3228,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.replaceRepo(payload.projectId, payload.repoRoot, payload.repoPath);
     } catch (error: any) {
@@ -3182,7 +3240,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return await orchestrator.reindexRepo(payload.projectId, payload.repoRoot);
     } catch (error: any) {
@@ -3194,7 +3252,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       return orchestrator.deleteRepo(payload.projectId, payload.repoRoot);
     } catch (error: any) {
@@ -3212,7 +3270,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const state = orchestrator.setActiveProjects(projectIds);
       return { success: true, state };
@@ -3225,7 +3283,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const state = orchestrator.setAnswerMode(mode);
       return { success: true, state };
@@ -3238,7 +3296,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
       }
       const state = orchestrator.setJDBiasEnabled(enabled);
       return { success: true, state };

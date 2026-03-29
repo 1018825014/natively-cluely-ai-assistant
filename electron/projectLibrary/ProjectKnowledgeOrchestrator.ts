@@ -143,11 +143,29 @@ function inferSkills(text: string): string[] {
   return candidates.filter((candidate) => lower.includes(candidate)).slice(0, 16);
 }
 
-function fallbackProjectsFromResume(text: string, maxProjects: number): ResumeProjectInput[] {
-  const sections = text
+function splitResumeSections(text: string): string[] {
+  return text
+    .replace(/\r/g, "")
     .split(/\n{2,}/)
     .map((section) => section.trim())
     .filter((section) => section.length > 40);
+}
+
+function inferProjectTitleFromSection(section: string, index: number, maxProjects: number): string {
+  const firstLine = section
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  if (firstLine && firstLine.length <= 80) {
+    return firstLine;
+  }
+
+  return maxProjects === 1 ? "主要项目" : `项目 ${index + 1}`;
+}
+
+function fallbackProjectsFromResume(text: string, maxProjects: number): ResumeProjectInput[] {
+  const sections = splitResumeSections(text);
 
   const ranked = sections
     .map((section) => ({
@@ -162,20 +180,21 @@ function fallbackProjectsFromResume(text: string, maxProjects: number): ResumePr
   if (!ranked.length) {
     return [
       {
-        title: "Primary Project",
+        title: "主要项目",
         summary: snippet(text, 420),
-        responsibilities: ["Built and explained the main system end to end."],
+        responsibilities: [snippet(text, 200)],
         techStack: inferSkills(text),
         modules: [],
         metrics: [],
         highlights: [],
         keywords: inferSkills(text),
+        sourceExcerpt: text.trim(),
       },
     ];
   }
 
   return ranked.map((item, index) => ({
-    title: maxProjects === 1 ? "Primary Project" : `Project ${index + 1}`,
+    title: inferProjectTitleFromSection(item.section, index, maxProjects),
     summary: snippet(item.section, 260),
     responsibilities: [snippet(item.section, 200)],
     techStack: inferSkills(item.section),
@@ -183,6 +202,7 @@ function fallbackProjectsFromResume(text: string, maxProjects: number): ResumePr
     metrics: [] as string[],
     highlights: [] as string[],
     keywords: inferSkills(item.section),
+    sourceExcerpt: item.section,
   }));
 }
 
@@ -322,6 +342,55 @@ export class ProjectKnowledgeOrchestrator {
     return this.store.buildState();
   }
 
+  public async deleteProject(projectId: string) {
+    const project = this.store.getProject(projectId);
+    if (!project) {
+      return { success: false, error: "Project not found." };
+    }
+
+    const jdAsset = this.store.listAssets(projectId).find((asset) => asset.kind === "jd") || null;
+    this.store.deleteProject(projectId);
+
+    const remainingProjects = this.store.listProjects();
+    if (!remainingProjects.length) {
+      this.store.setIdentity({});
+      this.store.setSkills([]);
+      this.store.setKnowledgeEnabled(false);
+      this.store.setActiveJD(null);
+      this.store.setJDBiasEnabled(false);
+      return { success: true };
+    }
+
+    if (!this.store.getActiveProjectIds().length) {
+      this.store.setActiveProjectIds([remainingProjects[0].id]);
+    }
+
+    if (jdAsset?.rawText) {
+      const jdTargetProjectId = this.store.getActiveProjectIds()[0] || remainingProjects[0].id;
+      const existingJdAssets = this.store
+        .listAssets(jdTargetProjectId)
+        .filter((asset) => asset.kind === "jd")
+        .map((asset) => asset.id);
+
+      if (existingJdAssets.length) {
+        this.store.deleteAssets(existingJdAssets);
+      }
+
+      await this.ingestParsedAsset(jdTargetProjectId, {
+        kind: "jd",
+        name: jdAsset.name,
+        sourcePath: jdAsset.sourcePath || "",
+        text: jdAsset.rawText,
+        metadata: jdAsset.metadata || {},
+      });
+    }
+
+    return {
+      success: true,
+      projects: this.store.listProjects(),
+    };
+  }
+
   public deleteDocumentsByType(docType: DocType): void {
     if (docType === DocType.RESUME) {
       this.pendingResumePreview = null;
@@ -392,7 +461,7 @@ export class ProjectKnowledgeOrchestrator {
     filePath: string;
     projectCount?: number;
     mappings?: ResumeImportMapping[];
-    editedProjects?: Array<ResumeProjectInput & { previewId?: string }>;
+    editedProjects?: Array<ResumeProjectInput & { previewId?: string; sourceExcerpt?: string }>;
     replaceMode: "confirmed_replace";
   }) {
     if (payload.replaceMode !== "confirmed_replace") {
@@ -416,7 +485,7 @@ export class ProjectKnowledgeOrchestrator {
       summary: preview.identity?.summary || "",
     };
 
-    const editedProjectsByPreviewId = new Map<string, ResumeProjectInput & { previewId?: string }>();
+    const editedProjectsByPreviewId = new Map<string, ResumeProjectInput & { previewId?: string; sourceExcerpt?: string }>();
     for (const project of payload.editedProjects || []) {
       const previewId = String(project.previewId || project.id || "").trim();
       if (previewId) editedProjectsByPreviewId.set(previewId, project);
@@ -472,16 +541,18 @@ export class ProjectKnowledgeOrchestrator {
         this.store.deleteAssets(existingResumeAssets);
       }
 
-      const excerpt = this.buildProjectResumeExcerpt(previewProject, resumeText);
+      const sourceText = String(previewProject.sourceExcerpt || "").trim() || this.buildProjectSourceText(previewProject, resumeText, normalizedCount);
       await this.ingestParsedAsset(project.id, {
         kind: "resume",
         name: path.basename(prepared.filePath),
         sourcePath: prepared.filePath,
-        text: excerpt,
+        text: sourceText,
         metadata: {
           docType: DocType.RESUME,
           source: "resume",
           previewId: previewProject.previewId,
+          projectTitle: previewProject.title,
+          isFullSource: true,
         },
       });
     }
@@ -709,7 +780,7 @@ export class ProjectKnowledgeOrchestrator {
       this.normalizePreviewProject({
         ...project,
         previewId: `preview-${index + 1}`,
-        sourceExcerpt: this.buildProjectResumeExcerpt(project, resumeText),
+        sourceExcerpt: String(project.sourceExcerpt || "").trim() || this.buildProjectSourceText(project, resumeText, projectCount),
       })
     );
 
@@ -800,18 +871,66 @@ export class ProjectKnowledgeOrchestrator {
     };
   }
 
-  private buildProjectResumeExcerpt(projectInput: ResumeProjectInput, resumeText: string): string {
-    return [
-      `Project title: ${projectInput.title}`,
-      projectInput.role ? `Role: ${projectInput.role}` : "",
-      projectInput.summary ? `Summary: ${projectInput.summary}` : "",
-      projectInput.responsibilities?.length ? `Responsibilities: ${projectInput.responsibilities.join("; ")}` : "",
-      projectInput.techStack?.length ? `Tech stack: ${projectInput.techStack.join(", ")}` : "",
-      projectInput.metrics?.length ? `Metrics: ${projectInput.metrics.join("; ")}` : "",
-      `Resume source excerpt: ${snippet(resumeText, 500)}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  private buildProjectSourceText(projectInput: ResumeProjectInput, resumeText: string, projectCount: number): string {
+    const normalizedResume = resumeText.replace(/\r/g, "").trim();
+    if (!normalizedResume) return "";
+
+    if (projectCount <= 1) {
+      return normalizedResume;
+    }
+
+    const sections = splitResumeSections(normalizedResume);
+    if (!sections.length) {
+      return normalizedResume;
+    }
+
+    const phrases = Array.from(
+      new Set(
+        [
+          projectInput.title,
+          projectInput.role,
+          projectInput.summary,
+          ...(projectInput.techStack || []),
+          ...(projectInput.keywords || []),
+          ...(projectInput.responsibilities || []).map((item) => snippet(item, 80)),
+          ...(projectInput.highlights || []).map((item) => snippet(item, 80)),
+        ]
+          .map((value) => String(value || "").trim())
+          .filter((value) => value.length >= 2)
+      )
+    ).slice(0, 24);
+
+    const scoredSections = sections.map((section, index) => {
+      const sectionLower = section.toLowerCase();
+      let score = 0;
+
+      for (const phrase of phrases) {
+        const normalizedPhrase = phrase.toLowerCase();
+        if (!sectionLower.includes(normalizedPhrase)) continue;
+
+        if (normalizedPhrase === String(projectInput.title || "").trim().toLowerCase()) {
+          score += 8;
+        } else if (normalizedPhrase.length >= 18) {
+          score += 4;
+        } else if (normalizedPhrase.length >= 8) {
+          score += 3;
+        } else {
+          score += 2;
+        }
+      }
+
+      return { index, section, score };
+    });
+
+    const positivelyMatched = scoredSections.filter((item) => item.score > 0).sort((a, b) => a.index - b.index);
+
+    if (positivelyMatched.length) {
+      const firstIndex = positivelyMatched[0].index;
+      const lastIndex = positivelyMatched[positivelyMatched.length - 1].index;
+      return sections.slice(firstIndex, lastIndex + 1).join("\n\n");
+    }
+
+    return sections[0] || normalizedResume;
   }
 
   private async rebuildAssetText(asset: AssetRecord, rawText: string) {
@@ -945,6 +1064,8 @@ Rules:
 - Use empty arrays instead of null.
 - Use concise, concrete summaries.
 - Do not mention uncertainty about ownership.
+- Preserve the original language of the resume content.
+- Do not translate project titles or descriptions unless the source already uses that language.
 
 Resume:
 ${resumeText.slice(0, 12000)}

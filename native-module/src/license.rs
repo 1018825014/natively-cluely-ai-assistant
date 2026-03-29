@@ -1,4 +1,7 @@
-use sha2::{Sha256, Digest};
+use napi::bindgen_prelude::*;
+use napi::Task;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
 /// Returns a deterministic hardware fingerprint (SHA-256 hash of the machine UID).
 /// This is used to lock license keys to a specific physical device.
@@ -14,16 +17,15 @@ pub fn get_hardware_id() -> String {
     format!("{:x}", hasher.finalize())
 }
 
-use napi::bindgen_prelude::*;
-use napi::Task;
-
-/// Background task that verifies a Gumroad license key via HTTP.
-/// Runs on a libuv worker thread — does NOT block the Node.js event loop.
-pub struct VerifyGumroadTask {
+/// Background task that verifies a license key via the configured license server.
+/// Runs on a libuv worker thread and returns the raw JSON body from the service.
+pub struct VerifyLicenseTask {
     license_key: String,
+    hardware_id: String,
+    endpoint: String,
 }
 
-impl Task for VerifyGumroadTask {
+impl Task for VerifyLicenseTask {
     type Output = String;
     type JsValue = String;
 
@@ -33,49 +35,47 @@ impl Task for VerifyGumroadTask {
             .build()
             .map_err(|e| napi::Error::from_reason(format!("ERR:client:{}", e)))?;
 
-        // Try both product identifiers (product_id for new products, permalink for old ones)
-        let product_ids = ["1HETxGKGYYf6DNDp5SnWVw==", "mzhzpt"];
-        let mut last_error = String::new();
+        let endpoint = if self.endpoint.trim().is_empty() {
+            default_license_endpoint()
+        } else {
+            self.endpoint.trim().to_string()
+        };
 
-        for (i, pid) in product_ids.iter().enumerate() {
-            // Only increment the use count on the canonical (first) attempt.
-            // Retry attempts against the legacy permalink should not double-count.
-            let increment = if i == 0 { "true" } else { "false" };
+        let payload = json!({
+            "license_key": self.license_key,
+            "hardware_id": self.hardware_id,
+        });
 
-            let res = client
-                .post("https://api.gumroad.com/v2/licenses/verify")
-                .form(&[
-                    ("product_id", *pid),
-                    ("license_key", self.license_key.as_str()),
-                    ("increment_uses_count", increment),
-                ])
-                .send();
+        match client.post(endpoint.as_str()).json(&payload).send() {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().unwrap_or_else(|_| {
+                    json!({
+                        "success": status.is_success(),
+                        "status": "empty_response",
+                        "error": "license server returned an empty body"
+                    })
+                    .to_string()
+                });
 
-            match res {
-                Ok(response) => {
-                    let body = response.text().unwrap_or_else(|_| "no body".to_string());
-                    // Parse first, log only the success/error fields (never log the full body
-                    // as it may contain the license key in plaintext)
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                        let success = json["success"].as_bool().unwrap_or(false);
-                        let msg = json["message"].as_str().unwrap_or("");
-                        println!("[LicenseRust] Gumroad response (pid={}): success={}, msg={}", pid, success, msg);
-                        if success {
-                            return Ok("OK".to_string());
-                        }
-                        last_error = msg.to_string();
-                    } else {
-                        println!("[LicenseRust] Gumroad response (pid={}): parse error", pid);
-                        last_error = "parse error".to_string();
-                    }
-                }
-                Err(e) => {
-                    last_error = format!("network: {}", e);
+                if body.trim().is_empty() {
+                    Ok(json!({
+                        "success": status.is_success(),
+                        "status": "empty_response",
+                        "error": "license server returned an empty body"
+                    })
+                    .to_string())
+                } else {
+                    Ok(body)
                 }
             }
+            Err(e) => Ok(json!({
+                "success": false,
+                "status": "network_error",
+                "error": format!("无法连接许可证服务: {}", e),
+            })
+            .to_string()),
         }
-
-        Ok(format!("ERR:gumroad:{}", last_error))
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
@@ -83,12 +83,22 @@ impl Task for VerifyGumroadTask {
     }
 }
 
-/// Validates a Gumroad license key by calling the Gumroad Licenses API.
-/// Returns a Promise that resolves to "OK" on success, or an error message string on failure.
-/// The HTTP call runs on a libuv worker thread to prevent blocking the Node.js event loop.
+/// Validates a license key by calling the provided license service endpoint.
+/// Returns the raw JSON response from the license service.
 #[napi]
-pub fn verify_gumroad_key(license_key: String) -> AsyncTask<VerifyGumroadTask> {
-    AsyncTask::new(VerifyGumroadTask { license_key })
+pub fn verify_license_key(license_key: String, hardware_id: String, endpoint: String) -> AsyncTask<VerifyLicenseTask> {
+    AsyncTask::new(VerifyLicenseTask { license_key, hardware_id, endpoint })
+}
+
+/// Compatibility alias kept for older JS call sites.
+/// Uses the current hardware id and the configured NATIVELY_LICENSE_API_URL.
+#[napi(js_name = "verifyGumroadKey")]
+pub fn verify_gumroad_key_compat(license_key: String) -> AsyncTask<VerifyLicenseTask> {
+    AsyncTask::new(VerifyLicenseTask {
+        license_key,
+        hardware_id: get_hardware_id(),
+        endpoint: default_license_endpoint(),
+    })
 }
 
 fn hostname_fallback() -> String {
@@ -100,4 +110,15 @@ fn hostname_fallback() -> String {
                 .map(|s| s.trim().to_string())
                 .unwrap_or_else(|_| "unknown-device".to_string())
         })
+}
+
+fn default_license_endpoint() -> String {
+    let base = std::env::var("NATIVELY_LICENSE_API_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+    let trimmed = base.trim_end_matches('/');
+    if trimmed.ends_with("/licenses/activate") {
+        trimmed.to_string()
+    } else {
+        format!("{}/licenses/activate", trimmed)
+    }
 }

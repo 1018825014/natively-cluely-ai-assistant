@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, Bell, Sparkles, Heart, Rocket } from 'lucide-react';
 import mainui from "../UI_comp/mainui.png";
+import { commercialConfig } from '../config/commercial';
 
 // --- Types ---
 // ... (rest of imports and types unchanged)
@@ -32,16 +33,16 @@ const FEATURES: FeatureSlide[] = [
 
     {
         id: 'support_natively',
-        headline: 'Support development',
-        subtitle: 'Built openly and sustained by users',
+        headline: 'Unlock commercial access',
+        subtitle: 'Buy a China-market license and keep shipping',
         bullets: [
-            'Development driven by real users',
-            'Faster iteration on features that matter',
+            'China-first purchase flow',
+            'Time-based licenses with manual renewal',
 
         ],
         type: 'support',
-        actionLabel: 'Contribute to development',
-        url: 'https://buymeacoffee.com/evinjohnn'
+        actionLabel: 'Open purchase page',
+        url: commercialConfig.purchasePageUrl
     }
 ];
 
