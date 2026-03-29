@@ -3146,6 +3146,30 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle("projectLibrary:analyzeProjectSource", async (_, payload: { sourceText: string; titleHint?: string }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
+      }
+      return await orchestrator.analyzeProjectSource(payload);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("projectLibrary:createProjectFromSource", async (_, payload: { sourceText: string; project?: any }) => {
+    try {
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: getKnowledgeEngineUnavailableError() };
+      }
+      return await orchestrator.createProjectFromSource(payload);
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   safeHandle("projectLibrary:deleteProject", async (_, projectId: string) => {
     try {
       const orchestrator = appState.getKnowledgeOrchestrator();

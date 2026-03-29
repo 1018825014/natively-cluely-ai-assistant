@@ -531,6 +531,8 @@ interface ElectronAPI {
   projectLibraryListProjects: () => Promise<any[]>;
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
   projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>;
+  projectLibraryAnalyzeProjectSource: (payload: { sourceText: string; titleHint?: string }) => Promise<{ success: boolean; project?: any; error?: string }>;
+  projectLibraryCreateProjectFromSource: (payload: { sourceText: string; project?: any }) => Promise<{ success: boolean; project?: any; error?: string }>;
   projectLibraryDeleteProject: (projectId: string) => Promise<{ success: boolean; projects?: any[]; error?: string }>;
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>;
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>;
@@ -1326,6 +1328,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   projectLibraryListProjects: () => ipcRenderer.invoke('projectLibrary:listProjects'),
   projectLibraryUpsertProject: (project: any) => ipcRenderer.invoke('projectLibrary:upsertProject', project),
   projectLibraryUpdateProject: (project: any) => ipcRenderer.invoke('projectLibrary:updateProject', project),
+  projectLibraryAnalyzeProjectSource: (payload: { sourceText: string; titleHint?: string }) => ipcRenderer.invoke('projectLibrary:analyzeProjectSource', payload),
+  projectLibraryCreateProjectFromSource: (payload: { sourceText: string; project?: any }) => ipcRenderer.invoke('projectLibrary:createProjectFromSource', payload),
   projectLibraryDeleteProject: (projectId: string) => ipcRenderer.invoke('projectLibrary:deleteProject', projectId),
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => ipcRenderer.invoke('projectLibrary:attachAssets', payload),
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => ipcRenderer.invoke('projectLibrary:attachRepo', payload),

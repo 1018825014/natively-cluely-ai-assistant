@@ -298,18 +298,21 @@ export class ProjectKnowledgeOrchestrator {
   }
 
   public upsertProject(input: ResumeProjectInput) {
-    const factCard = this.buildFactCardFromInput(input);
+    const normalized = this.normalizeProjectInput(input);
+    const factCard = this.buildFactCardFromInput(normalized);
     const project = this.store.upsertProject({
-      id: input.id,
-      title: input.title,
-      summary: input.summary || factCard.summary,
+      id: normalized.id,
+      title: normalized.title,
+      summary: normalized.summary || factCard.summary,
       factCard,
-      isActive: input.isActive,
+      isActive: normalized.isActive,
     });
 
     const activeProjectIds = this.store.getActiveProjectIds();
     if (!activeProjectIds.length) {
       this.store.setActiveProjectIds([project.id]);
+    } else if (!normalized.id && normalized.isActive !== false && !activeProjectIds.includes(project.id)) {
+      this.store.setActiveProjectIds([...activeProjectIds, project.id]);
     }
 
     return project;
@@ -321,6 +324,63 @@ export class ProjectKnowledgeOrchestrator {
     }
     const project = this.upsertProject(input);
     return { success: true, project };
+  }
+
+  public async analyzeProjectSource(payload: { sourceText: string; titleHint?: string }) {
+    const sourceText = String(payload.sourceText || "").replace(/\r/g, "").trim();
+    if (!sourceText) {
+      return { success: false, error: "Project source content cannot be empty." };
+    }
+
+    const project = await this.extractProjectKnowledge(sourceText, payload.titleHint);
+    return {
+      success: true,
+      project,
+    };
+  }
+
+  public async createProjectFromSource(payload: { sourceText: string; project?: ResumeProjectInput }) {
+    const sourceText = String(payload.sourceText || "").replace(/\r/g, "").trim();
+    if (!sourceText) {
+      return { success: false, error: "Project source content cannot be empty." };
+    }
+
+    const titleHint = String(payload.project?.title || "").trim() || undefined;
+    const extractedProject = await this.extractProjectKnowledge(sourceText, titleHint);
+    const finalProjectInput = this.normalizeProjectInput({
+      ...extractedProject,
+      ...(payload.project || {}),
+      sourceExcerpt: sourceText,
+    });
+
+    const project = this.upsertProject(finalProjectInput);
+    const existingResumeAssets = this.store
+      .listAssets(project.id)
+      .filter((asset) => asset.kind === "resume")
+      .map((asset) => asset.id);
+
+    if (existingResumeAssets.length) {
+      this.store.deleteAssets(existingResumeAssets);
+    }
+
+    await this.ingestParsedAsset(project.id, {
+      kind: "resume",
+      name: `${finalProjectInput.title} 完整内容`,
+      sourcePath: "",
+      text: sourceText,
+      metadata: {
+        docType: DocType.RESUME,
+        source: "manual_project",
+        projectTitle: finalProjectInput.title,
+        isFullSource: true,
+        manual: true,
+      },
+    });
+
+    return {
+      success: true,
+      project: this.store.getProject(project.id),
+    };
   }
 
   public getProjectFacts(projectId: string) {
@@ -795,19 +855,10 @@ export class ProjectKnowledgeOrchestrator {
   }
 
   private normalizePreviewProject(project: ResumeImportPreviewProject): ResumeImportPreviewProject {
+    const normalized = this.normalizeProjectInput(project);
     return {
       previewId: project.previewId,
-      title: String(project.title || "").trim() || "Untitled Project",
-      summary: String(project.summary || "").trim(),
-      role: String(project.role || "").trim(),
-      responsibilities: dedupeList(project.responsibilities),
-      techStack: dedupeList(project.techStack),
-      modules: dedupeList(project.modules),
-      metrics: dedupeList(project.metrics),
-      highlights: dedupeList(project.highlights),
-      keywords: dedupeList(project.keywords),
-      sourceExcerpt: String(project.sourceExcerpt || "").trim(),
-      isActive: project.isActive,
+      ...normalized,
     };
   }
 
@@ -858,16 +909,34 @@ export class ProjectKnowledgeOrchestrator {
   }
 
   private buildFactCardFromInput(input: ResumeProjectInput) {
+    const normalized = this.normalizeProjectInput(input);
     return {
-      title: input.title,
-      role: input.role || "",
-      summary: input.summary || "",
+      title: normalized.title,
+      role: normalized.role || "",
+      summary: normalized.summary || "",
+      responsibilities: dedupeList(normalized.responsibilities),
+      techStack: dedupeList(normalized.techStack),
+      modules: dedupeList(normalized.modules),
+      metrics: dedupeList(normalized.metrics),
+      highlights: dedupeList(normalized.highlights),
+      keywords: dedupeList(normalized.keywords),
+    };
+  }
+
+  private normalizeProjectInput(input: ResumeProjectInput): ResumeProjectInput {
+    return {
+      id: input.id,
+      title: String(input.title || "").trim() || "Untitled Project",
+      summary: String(input.summary || "").trim(),
+      role: String(input.role || "").trim(),
       responsibilities: dedupeList(input.responsibilities),
       techStack: dedupeList(input.techStack),
       modules: dedupeList(input.modules),
       metrics: dedupeList(input.metrics),
       highlights: dedupeList(input.highlights),
       keywords: dedupeList(input.keywords),
+      sourceExcerpt: String(input.sourceExcerpt || "").trim(),
+      isActive: input.isActive,
     };
   }
 
@@ -1172,6 +1241,75 @@ ${jdText.slice(0, 12000)}
       return "cross_project";
     }
     return "project_deep_dive";
+  }
+
+  private async extractProjectKnowledge(sourceText: string, titleHint?: string): Promise<ResumeProjectInput> {
+    const normalizedSource = sourceText.replace(/\r/g, "").trim();
+    const fallbackCandidate = fallbackProjectsFromResume(normalizedSource, 1)[0] || {
+      title: inferProjectTitleFromSection(normalizedSource, 0, 1),
+      summary: snippet(normalizedSource, 260),
+      responsibilities: [snippet(normalizedSource, 200)],
+      techStack: inferSkills(normalizedSource),
+      modules: [],
+      metrics: [],
+      highlights: [],
+      keywords: inferSkills(normalizedSource),
+    };
+    const fallbackProject = this.normalizeProjectInput({
+      ...fallbackCandidate,
+      title: String(titleHint || "").trim() || fallbackCandidate.title || inferProjectTitleFromSection(normalizedSource, 0, 1),
+      sourceExcerpt: normalizedSource,
+    });
+
+    if (!this.generateContentFn) {
+      return fallbackProject;
+    }
+
+    const prompt = `
+Extract one interview-ready project card from this source text.
+Return JSON only with this shape:
+{
+  "title": "",
+  "role": "",
+  "summary": "",
+  "responsibilities": ["..."],
+  "techStack": ["..."],
+  "modules": ["..."],
+  "metrics": ["..."],
+  "highlights": ["..."],
+  "keywords": ["..."]
+}
+Rules:
+- Treat the source as first-party experience the user can speak about.
+- Return exactly one project card.
+- Use empty arrays instead of null.
+- Use concise, concrete summaries.
+- Preserve the original language of the source content.
+- Do not translate project titles or descriptions unless the source already uses that language.
+- If the title hint is empty or conflicts with the source, ignore it.
+
+Title hint:
+${titleHint || "(none)"}
+
+Project source:
+${normalizedSource.slice(0, 12000)}
+`;
+
+    try {
+      const raw = await this.generateContentFn([{ text: prompt }]);
+      const jsonBlock = extractJsonBlock(raw);
+      if (!jsonBlock) throw new Error("Model did not return JSON.");
+      const parsed = safeJsonParse<any>(jsonBlock, {});
+      return this.normalizeProjectInput({
+        ...fallbackProject,
+        ...parsed,
+        title: parsed.title || fallbackProject.title,
+        sourceExcerpt: normalizedSource,
+      });
+    } catch (error) {
+      console.warn("[ProjectKnowledgeOrchestrator] Failed to extract single project JSON:", error);
+      return fallbackProject;
+    }
   }
 
   private selectTargetProjects(message: string, projects: ProjectRecord[], activeProjectIds: string[], intent: string): ProjectRecord[] {

@@ -28,19 +28,64 @@ function parseList(value: string): string[] {
 }
 
 function buildProjectDraft(project: any) {
-  const factCard = project?.factCard || {};
+  const factCard = project?.factCard || project || {};
   return {
-    id: project?.id || "",
+    id: project?.id || factCard.id || "",
     title: project?.title || factCard.title || "",
-    role: factCard.role || "",
+    role: project?.role || factCard.role || "",
     summary: project?.summary || factCard.summary || "",
-    responsibilities: joinList(factCard.responsibilities),
-    techStack: joinList(factCard.techStack),
-    modules: joinList(factCard.modules),
-    metrics: joinList(factCard.metrics),
-    highlights: joinList(factCard.highlights),
-    keywords: joinList(factCard.keywords),
+    responsibilities: joinList(project?.responsibilities ?? factCard.responsibilities),
+    techStack: joinList(project?.techStack ?? factCard.techStack),
+    modules: joinList(project?.modules ?? factCard.modules),
+    metrics: joinList(project?.metrics ?? factCard.metrics),
+    highlights: joinList(project?.highlights ?? factCard.highlights),
+    keywords: joinList(project?.keywords ?? factCard.keywords),
   };
+}
+
+function createEmptyProjectDraft() {
+  return {
+    id: "",
+    title: "",
+    role: "",
+    summary: "",
+    responsibilities: "",
+    techStack: "",
+    modules: "",
+    metrics: "",
+    highlights: "",
+    keywords: "",
+  };
+}
+
+function serializeProjectDraft(draft: any) {
+  return {
+    id: String(draft?.id || "").trim() || undefined,
+    title: String(draft?.title || "").trim(),
+    role: String(draft?.role || "").trim(),
+    summary: String(draft?.summary || "").trim(),
+    responsibilities: parseList(String(draft?.responsibilities || "")),
+    techStack: parseList(String(draft?.techStack || "")),
+    modules: parseList(String(draft?.modules || "")),
+    metrics: parseList(String(draft?.metrics || "")),
+    highlights: parseList(String(draft?.highlights || "")),
+    keywords: parseList(String(draft?.keywords || "")),
+  };
+}
+
+function hasProjectDraftContent(draft: any): boolean {
+  const serialized = serializeProjectDraft(draft);
+  return Boolean(
+    serialized.title ||
+    serialized.role ||
+    serialized.summary ||
+    serialized.responsibilities.length ||
+    serialized.techStack.length ||
+    serialized.modules.length ||
+    serialized.metrics.length ||
+    serialized.highlights.length ||
+    serialized.keywords.length
+  );
 }
 
 export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onProfileDataChange }) => {
@@ -51,13 +96,17 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
   const [savingProject, setSavingProject] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [assetSavingId, setAssetSavingId] = useState("");
+  const [analyzingProjectCard, setAnalyzingProjectCard] = useState(false);
+  const [analyzingNewProject, setAnalyzingNewProject] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [projectDetail, setProjectDetail] = useState<any>(null);
   const [projectDraft, setProjectDraft] = useState<any>(null);
   const [assetDrafts, setAssetDrafts] = useState<Record<string, string>>({});
   const [repoBusyKey, setRepoBusyKey] = useState("");
-  const [newTitle, setNewTitle] = useState("");
-  const [newSummary, setNewSummary] = useState("");
+  const [newProjectSource, setNewProjectSource] = useState("");
+  const [newProjectDraft, setNewProjectDraft] = useState<any>(createEmptyProjectDraft());
+  const [newProjectError, setNewProjectError] = useState("");
+  const [newProjectNeedsRefresh, setNewProjectNeedsRefresh] = useState(false);
   const detailPanelRef = useRef<HTMLDivElement | null>(null);
   const shouldScrollToDetailRef = useRef(false);
 
@@ -185,22 +234,41 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
     await refresh(projectId);
   };
 
-  const saveNewProject = async () => {
-    if (!newTitle.trim()) return;
-    setSavingProject(true);
+  const analyzeNewProject = async () => {
+    if (!newProjectSource.trim()) return;
+    setAnalyzingNewProject(true);
+    setNewProjectError("");
     try {
-      const result = await window.electronAPI?.projectLibraryUpsertProject?.({
-        title: newTitle.trim(),
-        summary: newSummary.trim(),
-        responsibilities: [],
-        techStack: [],
-        modules: [],
-        metrics: [],
-        highlights: [],
-        keywords: [],
+      const result = await window.electronAPI?.projectLibraryAnalyzeProjectSource?.({
+        sourceText: newProjectSource.trim(),
       });
-      setNewTitle("");
-      setNewSummary("");
+      if (!result?.success || !result.project) {
+        setNewProjectError(result?.error || "无法根据完整内容生成项目卡片。");
+        return;
+      }
+      setNewProjectDraft(buildProjectDraft(result.project));
+      setNewProjectNeedsRefresh(false);
+    } finally {
+      setAnalyzingNewProject(false);
+    }
+  };
+
+  const saveNewProject = async () => {
+    if (!newProjectSource.trim()) return;
+    setSavingProject(true);
+    setNewProjectError("");
+    try {
+      const result = await window.electronAPI?.projectLibraryCreateProjectFromSource?.({
+        sourceText: newProjectSource.trim(),
+        project: hasProjectDraftContent(newProjectDraft) ? serializeProjectDraft(newProjectDraft) : undefined,
+      });
+      if (!result?.success || !result.project) {
+        setNewProjectError(result?.error || "新增项目失败。");
+        return;
+      }
+      setNewProjectSource("");
+      setNewProjectDraft(createEmptyProjectDraft());
+      setNewProjectNeedsRefresh(false);
       await refresh(result?.project?.id);
     } finally {
       setSavingProject(false);
@@ -211,21 +279,38 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
     if (!projectDraft?.id) return;
     setSavingDraft(true);
     try {
-      await window.electronAPI?.projectLibraryUpdateProject?.({
-        id: projectDraft.id,
-        title: projectDraft.title.trim(),
-        role: projectDraft.role.trim(),
-        summary: projectDraft.summary.trim(),
-        responsibilities: parseList(projectDraft.responsibilities),
-        techStack: parseList(projectDraft.techStack),
-        modules: parseList(projectDraft.modules),
-        metrics: parseList(projectDraft.metrics),
-        highlights: parseList(projectDraft.highlights),
-        keywords: parseList(projectDraft.keywords),
-      });
+      await window.electronAPI?.projectLibraryUpdateProject?.(serializeProjectDraft(projectDraft));
       await refresh(projectDraft.id);
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const regenerateProjectDraft = async () => {
+    if (!resumeSourceAsset) return;
+    const sourceText = String(assetDrafts[resumeSourceAsset.id] || "").trim();
+    if (!sourceText) {
+      window.alert("请先填写项目完整内容，再重新生成项目卡片。");
+      return;
+    }
+
+    setAnalyzingProjectCard(true);
+    try {
+      const result = await window.electronAPI?.projectLibraryAnalyzeProjectSource?.({
+        sourceText,
+        titleHint: String(projectDraft?.title || selectedProject?.title || "").trim(),
+      });
+      if (!result?.success || !result.project) {
+        window.alert(result?.error || "无法根据完整内容重新生成项目卡片。");
+        return;
+      }
+
+      setProjectDraft({
+        ...buildProjectDraft(result.project),
+        id: projectDraft?.id || selectedProjectId,
+      });
+    } finally {
+      setAnalyzingProjectCard(false);
     }
   };
 
@@ -300,10 +385,6 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
       setRepoBusyKey("");
     }
   };
-
-  if (!libraryState?.projects?.length && !projects.length) {
-    return null;
-  }
 
   return (
     <div className="mt-5 space-y-5">
@@ -389,39 +470,107 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
           <div>
             <h4 className="text-sm font-bold text-text-primary">{"\u65b0\u589e\u9879\u76ee"}</h4>
             <p className="text-[11px] text-text-secondary mt-1">
-              {"\u5982\u679c\u7b80\u5386\u5bfc\u5165\u6f0f\u6389\u4e86\u9879\u76ee\uff0c\u53ef\u4ee5\u5728\u8fd9\u91cc\u624b\u52a8\u8865\u4e00\u5f20\u9879\u76ee\u5361\u3002"}
+              {"\u5148\u7c98\u8d34\u9879\u76ee\u5b8c\u6574\u5185\u5bb9\uff0c\u518d\u7531\u7cfb\u7edf\u5e2e\u4f60\u751f\u6210\u53ef\u7f16\u8f91\u7684\u9879\u76ee\u5361\u3002"}
             </p>
           </div>
         </div>
-        <div className="grid md:grid-cols-[1fr_1.5fr_auto] gap-3">
-          <input
-            value={newTitle}
-            onChange={(event) => setNewTitle(event.target.value)}
-            placeholder="\u9879\u76ee\u6807\u9898"
-            className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
-          />
-          <input
-            value={newSummary}
-            onChange={(event) => setNewSummary(event.target.value)}
-            placeholder="\u4e00\u53e5\u8bdd\u6982\u8ff0"
-            className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary"
-          />
-          <button
-            onClick={saveNewProject}
-            disabled={savingProject || !newTitle.trim()}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              savingProject || !newTitle.trim()
-                ? "bg-bg-input text-text-tertiary cursor-not-allowed"
-                : "bg-text-primary text-bg-main hover:opacity-90"
-            }`}
-          >
-            {savingProject ? "\u4fdd\u5b58\u4e2d..." : "\u4fdd\u5b58"}
-          </button>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border-subtle bg-bg-input px-3 py-3 space-y-3">
+            <div className="text-[10px] uppercase tracking-wide text-text-tertiary">{"项目完整内容"}</div>
+            <textarea
+              value={newProjectSource}
+              onChange={(event) => {
+                setNewProjectSource(event.target.value);
+                setNewProjectError("");
+                if (hasProjectDraftContent(newProjectDraft)) {
+                  setNewProjectNeedsRefresh(true);
+                }
+              }}
+              rows={10}
+              placeholder={"把项目的完整描述、职责、技术细节、结果等都贴在这里，再生成项目卡。"}
+              className="w-full bg-bg-main border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y"
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={analyzeNewProject}
+                disabled={analyzingNewProject || savingProject || !newProjectSource.trim()}
+                className={`px-3 py-2 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-2 ${
+                  analyzingNewProject || savingProject || !newProjectSource.trim()
+                    ? "bg-bg-input text-text-tertiary cursor-not-allowed border border-border-subtle"
+                    : "bg-bg-main border border-border-subtle text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                {analyzingNewProject ? <RefreshCw size={12} className="animate-spin" /> : <PencilLine size={12} />}
+                {analyzingNewProject ? "分析中..." : "分析项目卡片"}
+              </button>
+              <button
+                onClick={saveNewProject}
+                disabled={savingProject || analyzingNewProject || !newProjectSource.trim() || !hasProjectDraftContent(newProjectDraft) || newProjectNeedsRefresh}
+                className={`px-3 py-2 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-2 ${
+                  savingProject || analyzingNewProject || !newProjectSource.trim() || !hasProjectDraftContent(newProjectDraft) || newProjectNeedsRefresh
+                    ? "bg-bg-input text-text-tertiary cursor-not-allowed border border-border-subtle"
+                    : "bg-text-primary text-bg-main hover:opacity-90"
+                }`}
+              >
+                {savingProject ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
+                {savingProject ? "\u4fdd\u5b58\u4e2d..." : "\u4fdd\u5b58\u65b0\u9879\u76ee"}
+              </button>
+              <button
+                onClick={() => {
+                  setNewProjectSource("");
+                  setNewProjectDraft(createEmptyProjectDraft());
+                  setNewProjectError("");
+                  setNewProjectNeedsRefresh(false);
+                }}
+                disabled={savingProject || analyzingNewProject}
+                className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-main text-text-secondary hover:text-text-primary transition-colors"
+              >
+                {"清空"}
+              </button>
+            </div>
+            {newProjectNeedsRefresh && (
+              <div className="text-[11px] text-amber-500">
+                {"完整内容已修改，请重新分析项目卡片后再保存。"}
+              </div>
+            )}
+            {newProjectError && (
+              <div className="text-[11px] text-red-400">
+                {newProjectError}
+              </div>
+            )}
+          </div>
+
+          {hasProjectDraftContent(newProjectDraft) && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <PencilLine size={14} className="text-text-secondary" />
+                <h5 className="text-sm font-semibold text-text-primary">{"项目卡片"}</h5>
+              </div>
+              <div className="text-[11px] text-text-secondary">
+                {"系统已经根据完整内容生成了一版项目卡，你可以继续修改后再保存。"}
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <input value={newProjectDraft.title} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, title: e.target.value })} placeholder="\u9879\u76ee\u6807\u9898" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
+                <input value={newProjectDraft.role} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, role: e.target.value })} placeholder="\u62c5\u4efb\u89d2\u8272" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
+                <textarea value={newProjectDraft.summary} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, summary: e.target.value })} placeholder="\u9879\u76ee\u6982\u8ff0" rows={3} className="md:col-span-2 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.responsibilities} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, responsibilities: e.target.value })} placeholder="\u804c\u8d23\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.techStack} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, techStack: e.target.value })} placeholder="\u6280\u672f\u6808\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.modules} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, modules: e.target.value })} placeholder="\u6a21\u5757\u62c6\u5206\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.metrics} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, metrics: e.target.value })} placeholder="\u6307\u6807\u6216\u7ed3\u679c\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.highlights} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, highlights: e.target.value })} placeholder="\u4eae\u70b9\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+                <textarea value={newProjectDraft.keywords} onChange={(e) => setNewProjectDraft({ ...newProjectDraft, keywords: e.target.value })} placeholder="\u5173\u952e\u8bcd\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="space-y-3">
-        {currentProjects.map((project: any) => {
+        {currentProjects.length === 0 ? (
+          <div className="text-[11px] text-text-secondary border border-dashed border-border-subtle rounded-xl px-4 py-4 bg-bg-item-surface">
+            {"当前还没有项目。你可以先在上方粘贴完整内容，分析后保存第一个项目。"}
+          </div>
+        ) : currentProjects.map((project: any) => {
           const isActive = activeProjectIds.includes(project.id);
           const factCard = project.factCard || {};
           const tags = factCard.techStack || [];
@@ -516,33 +665,6 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
             </div>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-3">
-            <input value={projectDraft.title} onChange={(e) => setProjectDraft({ ...projectDraft, title: e.target.value })} placeholder="\u9879\u76ee\u6807\u9898" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
-            <input value={projectDraft.role} onChange={(e) => setProjectDraft({ ...projectDraft, role: e.target.value })} placeholder="\u62c5\u4efb\u89d2\u8272" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
-            <textarea value={projectDraft.summary} onChange={(e) => setProjectDraft({ ...projectDraft, summary: e.target.value })} placeholder="\u9879\u76ee\u6982\u8ff0" rows={3} className="md:col-span-2 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.responsibilities} onChange={(e) => setProjectDraft({ ...projectDraft, responsibilities: e.target.value })} placeholder="\u804c\u8d23\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.techStack} onChange={(e) => setProjectDraft({ ...projectDraft, techStack: e.target.value })} placeholder="\u6280\u672f\u6808\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.modules} onChange={(e) => setProjectDraft({ ...projectDraft, modules: e.target.value })} placeholder="\u6a21\u5757\u62c6\u5206\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.metrics} onChange={(e) => setProjectDraft({ ...projectDraft, metrics: e.target.value })} placeholder="\u6307\u6807\u6216\u7ed3\u679c\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.highlights} onChange={(e) => setProjectDraft({ ...projectDraft, highlights: e.target.value })} placeholder="\u4eae\u70b9\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-            <textarea value={projectDraft.keywords} onChange={(e) => setProjectDraft({ ...projectDraft, keywords: e.target.value })} placeholder="\u5173\u952e\u8bcd\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button onClick={saveProjectDraft} disabled={savingDraft} className="px-3 py-2 rounded-lg text-[11px] font-medium bg-text-primary text-bg-main hover:opacity-90 transition-colors flex items-center gap-2">
-              {savingDraft ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-              {savingDraft ? "\u4fdd\u5b58\u4e2d..." : "\u4fdd\u5b58\u9879\u76ee"}
-            </button>
-            <button onClick={() => attachAssets(selectedProjectId)} className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2">
-              <Upload size={12} />
-              {"\u6dfb\u52a0\u8d44\u6599"}
-            </button>
-            <button onClick={() => attachRepo(selectedProjectId)} className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2">
-              <FolderOpen size={12} />
-              {"\u5173\u8054\u4ed3\u5e93"}
-            </button>
-          </div>
-
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <FileText size={14} className="text-text-secondary" />
@@ -577,12 +699,56 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
                   {assetSavingId === resumeSourceAsset.id ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
                   {assetSavingId === resumeSourceAsset.id ? "\u91cd\u5efa\u4e2d..." : "保存完整内容"}
                 </button>
+                <button
+                  onClick={regenerateProjectDraft}
+                  disabled={analyzingProjectCard}
+                  className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-main text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2"
+                >
+                  {analyzingProjectCard ? <RefreshCw size={12} className="animate-spin" /> : <PencilLine size={12} />}
+                  {analyzingProjectCard ? "生成中..." : "根据完整内容生成卡片"}
+                </button>
               </div>
             ) : (
               <div className="text-[11px] text-text-secondary border border-dashed border-border-subtle rounded-lg px-3 py-3">
                 {"当前项目还没有保存完整来源内容。重新导入简历后，这里会显示并支持直接编辑。"}
               </div>
             )}
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <PencilLine size={14} className="text-text-secondary" />
+              <h5 className="text-sm font-semibold text-text-primary">{"项目卡片"}</h5>
+            </div>
+            <div className="text-[11px] text-text-secondary">
+              {"先维护上方的完整内容，再在这里确认和微调结构化字段。"}
+            </div>
+            <div className="grid md:grid-cols-2 gap-3">
+              <input value={projectDraft.title} onChange={(e) => setProjectDraft({ ...projectDraft, title: e.target.value })} placeholder="\u9879\u76ee\u6807\u9898" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
+              <input value={projectDraft.role} onChange={(e) => setProjectDraft({ ...projectDraft, role: e.target.value })} placeholder="\u62c5\u4efb\u89d2\u8272" className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
+              <textarea value={projectDraft.summary} onChange={(e) => setProjectDraft({ ...projectDraft, summary: e.target.value })} placeholder="\u9879\u76ee\u6982\u8ff0" rows={3} className="md:col-span-2 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.responsibilities} onChange={(e) => setProjectDraft({ ...projectDraft, responsibilities: e.target.value })} placeholder="\u804c\u8d23\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.techStack} onChange={(e) => setProjectDraft({ ...projectDraft, techStack: e.target.value })} placeholder="\u6280\u672f\u6808\uff0c\u6bcf\u884c\u4e00\u6761" rows={4} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.modules} onChange={(e) => setProjectDraft({ ...projectDraft, modules: e.target.value })} placeholder="\u6a21\u5757\u62c6\u5206\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.metrics} onChange={(e) => setProjectDraft({ ...projectDraft, metrics: e.target.value })} placeholder="\u6307\u6807\u6216\u7ed3\u679c\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.highlights} onChange={(e) => setProjectDraft({ ...projectDraft, highlights: e.target.value })} placeholder="\u4eae\u70b9\u5185\u5bb9\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+              <textarea value={projectDraft.keywords} onChange={(e) => setProjectDraft({ ...projectDraft, keywords: e.target.value })} placeholder="\u5173\u952e\u8bcd\uff0c\u6bcf\u884c\u4e00\u6761" rows={3} className="bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary resize-y" />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button onClick={saveProjectDraft} disabled={savingDraft} className="px-3 py-2 rounded-lg text-[11px] font-medium bg-text-primary text-bg-main hover:opacity-90 transition-colors flex items-center gap-2">
+              {savingDraft ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
+              {savingDraft ? "\u4fdd\u5b58\u4e2d..." : "\u4fdd\u5b58\u9879\u76ee"}
+            </button>
+            <button onClick={() => attachAssets(selectedProjectId)} className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2">
+              <Upload size={12} />
+              {"\u6dfb\u52a0\u8d44\u6599"}
+            </button>
+            <button onClick={() => attachRepo(selectedProjectId)} className="px-3 py-2 rounded-lg text-[11px] font-medium border border-border-subtle bg-bg-input text-text-secondary hover:text-text-primary transition-colors flex items-center gap-2">
+              <FolderOpen size={12} />
+              {"\u5173\u8054\u4ed3\u5e93"}
+            </button>
           </div>
 
           <div className="space-y-3">
@@ -662,7 +828,7 @@ export const ProfileVisualizer: React.FC<VisualizerProps> = ({ profileData, onPr
         <div ref={detailPanelRef} className="bg-bg-item-surface rounded-xl border border-dashed border-border-subtle p-5">
           <h4 className="text-sm font-bold text-text-primary">{"\u9879\u76ee\u8be6\u60c5"}</h4>
           <p className="text-[11px] text-text-secondary mt-2 leading-relaxed">
-            {"\u8bf7\u5148\u9009\u62e9\u4e00\u5f20\u9879\u76ee\u5361\uff0c\u518d\u70b9\u51fb\u201c\u7ba1\u7406\u201d\uff0c\u5373\u53ef\u5728\u8fd9\u91cc\u7f16\u8f91\u9879\u76ee\u5185\u5bb9\u3001\u9644\u4ef6\u548c\u4ed3\u5e93\u3002"}
+            {"\u8bf7\u5148\u5728\u4e0a\u65b9\u65b0\u589e\u6216\u9009\u62e9\u4e00\u4e2a\u9879\u76ee\uff0c\u518d\u5728\u8fd9\u91cc\u7f16\u8f91\u5b8c\u6574\u5185\u5bb9\u3001\u9879\u76ee\u5361\u3001\u9644\u4ef6\u548c\u4ed3\u5e93\u3002"}
           </p>
         </div>
       )}

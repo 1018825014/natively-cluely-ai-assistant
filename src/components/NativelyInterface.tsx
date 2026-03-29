@@ -2901,6 +2901,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             .trim()
     );
 
+    const compactMarkdownParagraphClass = "mb-1.5 last:mb-0 break-words [overflow-wrap:anywhere]";
+    const compactMarkdownListClass = "mb-1.5 ml-4 list-disc space-y-0.5";
+    const compactMarkdownOrderedListClass = "mb-1.5 ml-4 list-decimal space-y-0.5";
+    const compactMarkdownListItemClass = "pl-1 leading-6 [&>p]:mb-0 [&>p]:inline [&>p]:mr-1.5 [&>p:last-child]:mr-0 [&>ul]:mt-1 [&>ol]:mt-1";
+    const compactInlineCodeClass = "rounded bg-black/25 px-1 py-0.5 text-xs font-mono break-words [overflow-wrap:anywhere]";
+
 
 
 
@@ -2963,16 +2969,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                                         remarkPlugins={[remarkGfm, remarkMath]}
                                         rehypePlugins={[rehypeKatex]}
                                         components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
+                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]" {...props} />,
                                             strong: ({ node, ...props }: any) => <strong className="font-bold text-white" {...props} />,
                                             em: ({ node, ...props }: any) => <em className="italic text-slate-300" {...props} />,
                                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
                                             ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
-                                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                                            li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                                             h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-white mb-2 mt-3" {...props} />,
                                             h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-white mb-2 mt-3" {...props} />,
                                             h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-white mb-1 mt-2" {...props} />,
-                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-xs font-mono text-purple-200 whitespace-pre-wrap" {...props} />,
+                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-xs font-mono text-purple-200 break-words [overflow-wrap:anywhere]" {...props} />,
                                             blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-slate-400 my-2" {...props} />,
                                             a: ({ node, ...props }: any) => <a className="text-blue-400 hover:text-blue-300 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
                                         }}
@@ -2997,10 +3003,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            p: ({ node, ...props }: any) => <p className={compactMarkdownParagraphClass} {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                            li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                         }}>
                             {normalizedText}
                         </ReactMarkdown>
@@ -3018,10 +3024,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            p: ({ node, ...props }: any) => <p className={compactMarkdownParagraphClass} {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                            li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                         }}>
                             {normalizedText}
                         </ReactMarkdown>
@@ -3039,10 +3045,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     </div>
                     <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                            p: ({ node, ...props }: any) => <p className={compactMarkdownParagraphClass} {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                            li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                         }}>
                             {normalizedText}
                         </ReactMarkdown>
@@ -3118,12 +3124,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                                         remarkPlugins={[remarkGfm, remarkMath]}
                                         rehypePlugins={[rehypeKatex]}
                                         components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                                            p: ({ node, ...props }: any) => <p className={compactMarkdownParagraphClass} {...props} />,
                                             strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
                                             em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
-                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
-                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-1.5 space-y-0.5" {...props} />,
-                                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                                            ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                                            ol: ({ node, ...props }: any) => <ol className={compactMarkdownOrderedListClass} {...props} />,
+                                            li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                                         }}
                                     >
                                         {compactMarkdownText(part)}
@@ -3144,13 +3150,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
-                        p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0 whitespace-pre-wrap" {...props} />,
+                        p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]" {...props} />,
                         strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
                         em: ({ node, ...props }: any) => <em className="italic opacity-90" {...props} />,
-                        ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-1.5 space-y-0.5" {...props} />,
-                        ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-1.5 space-y-0.5" {...props} />,
-                        li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
+                        ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                        ol: ({ node, ...props }: any) => <ol className={compactMarkdownOrderedListClass} {...props} />,
+                        li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
+                        code: ({ node, ...props }: any) => <code className={compactInlineCodeClass} {...props} />,
                         a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
                     }}
                 >
@@ -3903,17 +3909,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     };
 
     const renderRecommendationContent = (msg: Message) => (
-        <div className="markdown-content text-[13px] leading-6 text-slate-100">
+        <div className="markdown-content text-[13px] leading-6 text-slate-100 break-words [overflow-wrap:anywhere]">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
                 components={{
-                    p: ({ node, ...props }: any) => <p className="mb-1.5 last:mb-0" {...props} />,
+                    p: ({ node, ...props }: any) => <p className={compactMarkdownParagraphClass} {...props} />,
                     strong: ({ node, ...props }: any) => <strong className="font-extrabold text-white" {...props} />,
                     em: ({ node, ...props }: any) => <em className="italic text-emerald-100/85" {...props} />,
-                    ul: ({ node, ...props }: any) => <ul className="mb-1.5 ml-4 list-disc space-y-0.5" {...props} />,
-                    ol: ({ node, ...props }: any) => <ol className="mb-1.5 ml-4 list-decimal space-y-0.5" {...props} />,
-                    li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                    ul: ({ node, ...props }: any) => <ul className={compactMarkdownListClass} {...props} />,
+                    ol: ({ node, ...props }: any) => <ol className={compactMarkdownOrderedListClass} {...props} />,
+                    li: ({ node, ...props }: any) => <li className={compactMarkdownListItemClass} {...props} />,
                     blockquote: ({ node, ...props }: any) => <blockquote className="my-2 border-l-2 border-emerald-400/30 pl-3 text-slate-300/90" {...props} />,
                     pre: ({ node, ...props }: any) => <div className="my-2 overflow-hidden rounded-xl border border-white/[0.08] bg-zinc-800/60" {...props} />,
                     code: ({ inline, className, children, ...props }: any) => {
@@ -3942,7 +3948,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                         }
 
                         return (
-                            <code className="rounded bg-black/25 px-1 py-0.5 text-xs font-mono text-emerald-100" {...props}>
+                            <code className={`${compactInlineCodeClass} text-emerald-100`} {...props}>
                                 {children}
                             </code>
                         );

@@ -552,6 +552,8 @@ export interface ElectronAPI {
   projectLibraryListProjects: () => Promise<any[]>
   projectLibraryUpsertProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
   projectLibraryUpdateProject: (project: any) => Promise<{ success: boolean; project?: any; error?: string }>
+  projectLibraryAnalyzeProjectSource: (payload: { sourceText: string; titleHint?: string }) => Promise<{ success: boolean; project?: any; error?: string }>
+  projectLibraryCreateProjectFromSource: (payload: { sourceText: string; project?: any }) => Promise<{ success: boolean; project?: any; error?: string }>
   projectLibraryDeleteProject: (projectId: string) => Promise<{ success: boolean; projects?: any[]; error?: string }>
   projectLibraryAttachAssets: (payload: { projectId: string; filePaths: string[] }) => Promise<{ success: boolean; attached?: Array<{ name: string; kind: string }>; error?: string }>
   projectLibraryAttachRepo: (payload: { projectId: string; repoPath: string }) => Promise<{ success: boolean; attachedCount?: number; repoPath?: string; error?: string }>
