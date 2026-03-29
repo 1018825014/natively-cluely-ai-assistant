@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/build-license-lite.ps1 `
-            -ElectronBuilderArgs @('--mac', 'zip', 'dmg', '--${{ matrix.arch }}')
+            -ElectronBuilderArgs @('--mac', 'zip', 'dmg', '--${{ matrix.arch }}', '--publish', 'never')
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
