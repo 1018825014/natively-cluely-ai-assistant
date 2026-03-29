@@ -15,6 +15,7 @@ import { OpenAICompatibleProviderId } from "./services/LlmProviderProfiles";
 import { runtimeLogger } from "./services/RuntimeLogger";
 import { llmTraceRecorder, type LlmTraceActionInit, type LlmTraceActionType } from "./services/LlmTraceRecorder";
 import { PromptLabActionId, PromptLabFixedFieldKey } from "./services/PromptOverrideManager";
+import { getCommercialConfig } from "./services/CommercialConfig";
 
 import { RECOGNITION_LANGUAGES, AI_RESPONSE_LANGUAGES } from "./config/languages"
 
@@ -59,6 +60,28 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.getKnowledgeEngineError()
     || '本地知识库引擎未初始化，请检查数据库和原生依赖是否可用。'
   );
+
+  const requireActiveLicense = async () => {
+    if (!getCommercialConfig().requireLicense) {
+      return null;
+    }
+
+    try {
+      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
+      const isPremium = await LicenseManager.getInstance().isPremium();
+      if (isPremium) {
+        return null;
+      }
+    } catch (error) {
+      console.warn('[IPC] License check failed while enforcing license requirement:', error);
+    }
+
+    return {
+      success: false,
+      error: 'Please activate a valid license before using this build.',
+      code: 'license_required',
+    };
+  };
 
   ipcMain.removeAllListeners("runtime-log:renderer-report");
   ipcMain.on("runtime-log:renderer-report", (_event, payload) => {
@@ -694,6 +717,12 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
+    if (mode === 'overlay') {
+      const blocked = await requireActiveLicense();
+      if (blocked) {
+        return blocked;
+      }
+    }
     appState.getWindowHelper().setWindowMode(mode);
     return { success: true };
   })
@@ -2331,6 +2360,10 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("start-meeting", async (event, metadata?: any) => {
     try {
+      const blocked = await requireActiveLicense();
+      if (blocked) {
+        return blocked;
+      }
       await appState.startMeeting(metadata);
       return { success: true };
     } catch (error: any) {

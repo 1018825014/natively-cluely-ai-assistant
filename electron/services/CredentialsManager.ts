@@ -295,11 +295,11 @@ export class CredentialsManager {
     }
 
     public getSttLanguage(): string {
-        return process.env.NATIVELY_STT_LANGUAGE || this.credentials.sttLanguage || 'english-us';
+        return process.env.NATIVELY_STT_LANGUAGE || this.credentials.sttLanguage || 'chinese';
     }
 
     public getAiResponseLanguage(): string {
-        return this.credentials.aiResponseLanguage || 'English';
+        return this.credentials.aiResponseLanguage || 'Chinese';
     }
 
     public getDefaultModel(): string {

@@ -581,7 +581,34 @@ export interface ElectronAPI {
   setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'alibaba', modelId: string) => Promise<void>
 
   // License Management
-  licenseActivate: (key: string) => Promise<{ success: boolean; error?: string }>
+  licenseActivate: (key: string) => Promise<{
+    success: boolean
+    status: 'inactive' | 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace' | 'invalid_license' | 'network_error'
+    error?: string
+    entitlement?: {
+      licenseKey: string
+      sku: string
+      status: 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace'
+      expiresAt: string | null
+      activationLimit: number
+      orderId: string
+      buyerId: string
+      hardwareId: string
+      lastValidatedAt: string
+      offlineGraceEndsAt: string | null
+      signature: string
+    } | null
+    license?: {
+      licenseKey: string
+      sku: string
+      durationDays: number | null
+      expiresAt: string | null
+      activationLimit: number
+      status: 'inactive' | 'valid' | 'expired' | 'revoked' | 'activation_limit_hit' | 'offline_grace' | 'invalid_license' | 'network_error'
+      orderId: string
+      buyerId: string
+    } | null
+  }>
   licenseCheckPremium: () => Promise<boolean>
   licenseDeactivate: () => Promise<void>
   licenseGetHardwareId: () => Promise<string>

@@ -8,17 +8,40 @@ if (!app.isPackaged) {
   require('dotenv').config();
 }
 
-const forcedUserDataName = process.env.NATIVELY_USER_DATA_NAME?.trim();
-if (!app.isPackaged) {
-  const currentUserDataPath = app.getPath("userData");
-  const desiredUserDataPath = forcedUserDataName
-    ? path.join(app.getPath("appData"), forcedUserDataName)
-    : path.join(app.getPath("appData"), "natively");
+function readRuntimeBuildUserDataName(): string {
+  const candidates = [
+    path.join(__dirname, "..", "runtime-build-config.json"),
+    path.join(process.cwd(), "dist-electron", "runtime-build-config.json"),
+  ];
 
-  if (currentUserDataPath !== desiredUserDataPath) {
-    app.setPath("userData", desiredUserDataPath);
-    console.log(`[Main] Redirected dev userData: ${currentUserDataPath} -> ${desiredUserDataPath}`);
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      const userDataName = `${parsed?.userDataName || ""}`.trim();
+      if (userDataName) {
+        return userDataName;
+      }
+    } catch (error) {
+      console.warn(`[Main] Failed to read runtime build config from ${candidate}:`, error);
+    }
   }
+
+  return "";
+}
+
+const forcedUserDataName = process.env.NATIVELY_USER_DATA_NAME?.trim() || readRuntimeBuildUserDataName();
+const currentUserDataPath = app.getPath("userData");
+const desiredUserDataPath = forcedUserDataName
+  ? path.join(app.getPath("appData"), forcedUserDataName)
+  : (!app.isPackaged ? path.join(app.getPath("appData"), "natively") : currentUserDataPath);
+
+if (currentUserDataPath !== desiredUserDataPath) {
+  app.setPath("userData", desiredUserDataPath);
+  console.log(`[Main] Redirected userData: ${currentUserDataPath} -> ${desiredUserDataPath}`);
 }
 
 runtimeLogger.installProcessHandlers();
@@ -119,6 +142,13 @@ function formatTechnicalGlossarySyncWarning(warning: string): string {
 
   if (warning.includes("No valid glossary entries were available for Alibaba hotword syncing")) {
     return "热词表已保存，但当前没有可同步的有效热词条目。";
+  }
+
+  if (
+    warning.includes("Throttling.AllocationQuota") ||
+    warning.includes("Free allocated quota exceeded")
+  ) {
+    return "热词表已保存到本地，但阿里云热词创建额度已用完，暂时无法同步远端热词。请为当前阿里云账号开通或升级百炼语音相关配额后再试。";
   }
 
   const failedPrefix = "Failed to sync Alibaba hotwords for ";

@@ -22,6 +22,7 @@ export interface CommercialConfig {
     licenseApiBaseUrl: string;
     updateFeedUrl: string;
     hostedGatewayBaseUrl: string;
+    requireLicense: boolean;
     hostedEnabled: boolean;
     hideByok: boolean;
 }
@@ -76,6 +77,7 @@ export function getCommercialConfig(): CommercialConfig {
     resolved.licenseApiBaseUrl = trimTrailingSlash(resolved.licenseApiBaseUrl);
     resolved.hostedGatewayBaseUrl = trimTrailingSlash(resolved.hostedGatewayBaseUrl || resolved.licenseApiBaseUrl);
     resolved.updateFeedUrl = resolved.updateFeedUrl.trim();
+    resolved.requireLicense = parseBooleanEnv(process.env.NATIVELY_REQUIRE_LICENSE, resolved.requireLicense);
     resolved.hostedEnabled = parseBooleanEnv(process.env.NATIVELY_HOSTED_ENABLED, resolved.hostedEnabled);
     resolved.hideByok = parseBooleanEnv(process.env.NATIVELY_HIDE_BYOK, resolved.hideByok);
 

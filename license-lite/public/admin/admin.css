@@ -1,0 +1,425 @@
+:root {
+  color-scheme: dark;
+  --bg: #07121e;
+  --panel: rgba(9, 20, 36, 0.88);
+  --panel-soft: rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.11);
+  --text: #eff6ff;
+  --muted: #93a4ba;
+  --accent: #56f0b5;
+  --accent-strong: #2fe6a2;
+  --danger: #ff7c7c;
+  --warning: #ffd36f;
+  --shadow: 0 28px 90px rgba(0, 0, 0, 0.35);
+  --radius: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(86, 240, 181, 0.16), transparent 32%),
+    linear-gradient(180deg, #07121e 0%, #0d1829 55%, #111b2d 100%);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.page-shell {
+  width: min(1240px, calc(100vw - 28px));
+  margin: 0 auto;
+  padding: 18px 0 42px;
+}
+
+.hero-card,
+.panel {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.hero-card {
+  padding: 22px;
+}
+
+.hero-pill,
+.topbar-tag,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(86, 240, 181, 0.1);
+  border: 1px solid rgba(86, 240, 181, 0.18);
+  color: #ddfff2;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-card h1,
+.panel h2,
+.panel h3 {
+  margin: 14px 0 0;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.hero-card h1 {
+  font-size: clamp(28px, 4vw, 40px);
+}
+
+.hero-card p,
+.muted,
+.panel-head p,
+.field span,
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--muted);
+}
+
+.hero-card p,
+.panel-head p,
+.field,
+.detail-card,
+.license-list,
+.result-box {
+  line-height: 1.65;
+}
+
+.app-grid {
+  margin-top: 16px;
+}
+
+.auth-panel,
+.topbar-panel {
+  padding: 20px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.dashboard-grid .panel {
+  padding: 20px;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.panel-head h2,
+.panel-head h3 {
+  margin-top: 0;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stack-form {
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(3, 10, 18, 0.8);
+  color: var(--text);
+  padding: 14px 16px;
+  outline: none;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: rgba(86, 240, 181, 0.45);
+  transform: translateY(-1px);
+}
+
+.advanced-box {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: var(--panel-soft);
+  padding: 14px 16px;
+}
+
+.advanced-box summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.advanced-grid {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+}
+
+.inline-form {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.compact-field {
+  min-width: 120px;
+}
+
+.search-field {
+  flex: 1 1 320px;
+}
+
+.primary-button,
+.secondary-button,
+.ghost-button,
+.danger-button,
+.tiny-button {
+  border: 0;
+  border-radius: 18px;
+  padding: 13px 16px;
+  font-weight: 700;
+  transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.ghost-button:hover,
+.danger-button:hover,
+.tiny-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button {
+  background: linear-gradient(135deg, var(--accent) 0%, #7ed9ff 100%);
+  color: #06111d;
+}
+
+.secondary-button {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.danger-button {
+  background: rgba(255, 124, 124, 0.14);
+  color: #ffe5e5;
+  border: 1px solid rgba(255, 124, 124, 0.22);
+}
+
+.tiny-button {
+  padding: 10px 12px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.license-list,
+.detail-card,
+.result-box {
+  display: grid;
+  gap: 12px;
+}
+
+.license-card,
+.detail-section,
+.result-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 14px;
+}
+
+.license-card-head,
+.detail-section-head,
+.result-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.license-key {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  word-break: break-all;
+}
+
+.meta-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 14px;
+}
+
+.meta-row span:first-child {
+  color: var(--muted);
+}
+
+.license-actions,
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.detail-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  color: #cfdef1;
+}
+
+.empty-state {
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.status-valid {
+  color: #caffe9;
+  background: rgba(86, 240, 181, 0.12);
+}
+
+.status-expired,
+.status-revoked {
+  color: #ffe4c0;
+  background: rgba(255, 181, 91, 0.12);
+}
+
+.status-inactive,
+.status-invalid_license,
+.status-network_error,
+.status-activation_limit_hit {
+  color: #ffd5d5;
+  background: rgba(255, 124, 124, 0.12);
+}
+
+.result-panel {
+  grid-column: span 2;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  width: min(520px, calc(100vw - 28px));
+  border-radius: 18px;
+  background: rgba(7, 18, 30, 0.96);
+  border: 1px solid rgba(86, 240, 181, 0.18);
+  color: var(--text);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  z-index: 30;
+}
+
+@media (max-width: 900px) {
+  .page-shell {
+    width: min(100vw - 18px, 100%);
+    padding-top: 10px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-panel {
+    grid-column: span 1;
+  }
+
+  .topbar,
+  .license-card-head,
+  .detail-section-head,
+  .result-item-head,
+  .meta-row {
+    flex-direction: column;
+  }
+
+  .inline-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topbar-actions,
+  .license-actions,
+  .result-actions {
+    width: 100%;
+  }
+
+  .topbar-actions button,
+  .license-actions button,
+  .result-actions button {
+    flex: 1 1 auto;
+  }
+}

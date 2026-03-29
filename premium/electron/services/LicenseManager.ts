@@ -72,16 +72,23 @@ function parsePayload<T>(payload: string | object | null | undefined): T {
   if (!payload) {
     throw new Error('Empty payload');
   }
+
   return typeof payload === 'string' ? JSON.parse(payload) as T : payload as T;
 }
 
 function isEntitlementWithinOfflineGrace(entitlement: LicenseEntitlement | null): boolean {
-  if (!entitlement?.offlineGraceEndsAt) return false;
+  if (!entitlement?.offlineGraceEndsAt) {
+    return false;
+  }
+
   return Date.now() <= new Date(entitlement.offlineGraceEndsAt).getTime();
 }
 
 function isEntitlementExpired(entitlement: LicenseEntitlement | null): boolean {
-  if (!entitlement?.expiresAt) return false;
+  if (!entitlement?.expiresAt) {
+    return false;
+  }
+
   return Date.now() > new Date(entitlement.expiresAt).getTime();
 }
 
@@ -106,6 +113,7 @@ export class LicenseManager {
     if (!LicenseManager.instance) {
       LicenseManager.instance = new LicenseManager();
     }
+
     return LicenseManager.instance;
   }
 
@@ -113,10 +121,16 @@ export class LicenseManager {
     return nativeBinding.getHardwareId();
   }
 
-  public async activateLicense(licenseKey: string): Promise<{ success: boolean; error?: string }> {
+  public async activateLicense(licenseKey: string): Promise<ActivationResponse> {
     const normalizedKey = licenseKey.trim().toUpperCase();
     if (!normalizedKey) {
-      return { success: false, error: '请输入许可证。' };
+      return {
+        success: false,
+        status: 'invalid_license',
+        error: '请输入授权码。',
+        entitlement: null,
+        license: null,
+      };
     }
 
     try {
@@ -125,16 +139,28 @@ export class LicenseManager {
       const payload = await this.invokeVerifier(normalizedKey, hardwareId, endpoint);
 
       if (!payload.success || !payload.entitlement) {
-        return { success: false, error: payload.error || '许可证激活失败。' };
+        return {
+          success: false,
+          status: payload.status || 'invalid_license',
+          error: payload.error || '许可证激活失败。',
+          entitlement: payload.entitlement || null,
+          license: payload.license || null,
+        };
       }
 
       this.store.set('licenseKey', normalizedKey);
       this.store.set('entitlement', payload.entitlement);
       this.store.set('license', payload.license || null);
-      return { success: true };
+      return payload;
     } catch (error) {
       console.error('[LicenseManager] activateLicense failed:', error);
-      return { success: false, error: '无法连接许可证服务，请稍后重试。' };
+      return {
+        success: false,
+        status: 'network_error',
+        error: '无法连接许可证服务，请稍后重试。',
+        entitlement: null,
+        license: null,
+      };
     }
   }
 
@@ -170,13 +196,16 @@ export class LicenseManager {
     }
 
     try {
-      const response = await axios.get<LicenseStatusResponse>(`${getCommercialConfig().licenseApiBaseUrl}/licenses/status`, {
-        params: {
-          license_key: licenseKey,
-          hardware_id: this.getHardwareId(),
+      const response = await axios.get<LicenseStatusResponse>(
+        `${getCommercialConfig().licenseApiBaseUrl}/licenses/status`,
+        {
+          params: {
+            license_key: licenseKey,
+            hardware_id: this.getHardwareId(),
+          },
+          timeout: 15000,
         },
-        timeout: 15000,
-      });
+      );
       const payload = response.data;
 
       if (payload.entitlement) {
@@ -220,12 +249,16 @@ export class LicenseManager {
     const licenseKey = this.store.get('licenseKey');
     if (licenseKey) {
       try {
-        await axios.post(`${getCommercialConfig().licenseApiBaseUrl}/licenses/deactivate`, {
-          license_key: licenseKey,
-          hardware_id: this.getHardwareId(),
-        }, {
-          timeout: 10000,
-        });
+        await axios.post(
+          `${getCommercialConfig().licenseApiBaseUrl}/licenses/deactivate`,
+          {
+            license_key: licenseKey,
+            hardware_id: this.getHardwareId(),
+          },
+          {
+            timeout: 10000,
+          },
+        );
       } catch (error) {
         console.warn('[LicenseManager] deactivate request failed:', error);
       }
@@ -236,7 +269,11 @@ export class LicenseManager {
     this.store.set('license', null);
   }
 
-  private async invokeVerifier(licenseKey: string, hardwareId: string, endpoint: string): Promise<ActivationResponse> {
+  private async invokeVerifier(
+    licenseKey: string,
+    hardwareId: string,
+    endpoint: string,
+  ): Promise<ActivationResponse> {
     if (nativeBinding.verifyLicenseKey) {
       const raw = await nativeBinding.verifyLicenseKey(licenseKey, hardwareId, endpoint);
       return parsePayload<ActivationResponse>(raw);
@@ -247,12 +284,16 @@ export class LicenseManager {
       return parsePayload<ActivationResponse>(raw);
     }
 
-    const response = await axios.post<ActivationResponse>(endpoint, {
-      license_key: licenseKey,
-      hardware_id: hardwareId,
-    }, {
-      timeout: 15000,
-    });
+    const response = await axios.post<ActivationResponse>(
+      endpoint,
+      {
+        license_key: licenseKey,
+        hardware_id: hardwareId,
+      },
+      {
+        timeout: 15000,
+      },
+    );
     return response.data;
   }
 
@@ -260,6 +301,7 @@ export class LicenseManager {
     if (!entitlement.lastValidatedAt) {
       return true;
     }
+
     return Date.now() - new Date(entitlement.lastValidatedAt).getTime() > this.refreshIntervalMs;
   }
 }

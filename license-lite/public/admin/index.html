@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Natively 授权后台</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero-card">
+        <div class="hero-pill">Natively License Admin</div>
+        <h1>随时随地发码的授权后台</h1>
+        <p>
+          这套后台可以直接部署在你的云服务器上。之后你只要在任何有网络的电脑或手机上打开网站，登录后就能发码、续费、换机重置和停用授权。
+        </p>
+      </header>
+
+      <main class="app-grid">
+        <section class="panel auth-panel" id="loginPanel">
+          <div class="panel-head">
+            <div>
+              <h2>登录后台</h2>
+              <p id="loginHint">请输入后台账号和密码。</p>
+            </div>
+          </div>
+
+          <form id="loginForm" class="stack-form">
+            <label class="field">
+              <span>账号</span>
+              <input id="loginUsername" name="username" type="text" autocomplete="username" value="admin" required />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+            </label>
+            <button class="primary-button" type="submit">登录授权后台</button>
+          </form>
+        </section>
+
+        <section class="dashboard" id="dashboardPanel" hidden>
+          <div class="panel topbar-panel">
+            <div class="topbar">
+              <div>
+                <div class="topbar-tag" id="sessionStatus">已登录</div>
+                <h2>授权管理台</h2>
+                <p class="muted">适合手机和电脑直接操作，发码后可以立刻复制发给客户。</p>
+              </div>
+              <div class="topbar-actions">
+                <button class="secondary-button" id="refreshListButton" type="button">刷新列表</button>
+                <button class="ghost-button" id="logoutButton" type="button">退出登录</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>创建授权码</h3>
+                  <p>这里是最常用的入口。发码成功后会在下方直接显示授权码。</p>
+                </div>
+              </div>
+
+              <form id="createForm" class="stack-form">
+                <label class="field">
+                  <span>授权类型</span>
+                  <select id="createSku" name="sku">
+                    <option value="cn_1d">1 天正式版</option>
+                    <option value="cn_1d_promo">推广试用码（1-7 天，不限设备）</option>
+                    <option value="cn_7d">7 天正式版</option>
+                    <option value="cn_30d">30 天正式版</option>
+                    <option value="cn_365d">365 天正式版</option>
+                    <option value="cn_lifetime">永久版</option>
+                  </select>
+                </label>
+
+                <label class="field promo-field" id="createPromoDurationField" hidden>
+                  <span>推广天数（1-7）</span>
+                  <input id="createPromoDuration" name="durationDays" type="number" min="1" max="7" value="3" />
+                </label>
+
+                <label class="field">
+                  <span>买家标识</span>
+                  <input id="createBuyerId" name="buyerId" type="text" placeholder="微信名 / 客户备注" required />
+                </label>
+
+                <label class="field">
+                  <span>订单号</span>
+                  <input id="createOrderId" name="orderId" type="text" placeholder="可留空，默认自动生成" />
+                </label>
+
+                <label class="field">
+                  <span>微信备注</span>
+                  <input id="createWechatNote" name="wechatNote" type="text" placeholder="例如：老板介绍、推广活动" />
+                </label>
+
+                <label class="field">
+                  <span>订单备注</span>
+                  <textarea id="createOrderNote" name="orderNote" rows="3" placeholder="例如：已收款，首单体验"></textarea>
+                </label>
+
+                <details class="advanced-box">
+                  <summary>高级选项</summary>
+                  <div class="advanced-grid">
+                    <label class="field">
+                      <span>自定义设备上限</span>
+                      <input id="createActivationLimit" name="activationLimit" type="number" min="0" placeholder="留空用默认值" />
+                    </label>
+                    <label class="field">
+                      <span>自定义授权码</span>
+                      <input id="createLicenseKey" name="licenseKey" type="text" placeholder="一般留空自动生成" />
+                    </label>
+                  </div>
+                </details>
+
+                <button class="primary-button" type="submit">生成授权码</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>最近授权码</h3>
+                  <p>点卡片里的按钮可以直接查看详情、复制、续费、重置或停用。</p>
+                </div>
+              </div>
+
+              <div class="inline-form">
+                <label class="field search-field">
+                  <span>搜索</span>
+                  <input id="searchQuery" type="text" placeholder="搜授权码 / 买家 / 微信备注 / 订单号" />
+                </label>
+                <label class="field compact-field">
+                  <span>显示数量</span>
+                  <input id="listLimit" type="number" min="1" max="100" value="20" />
+                </label>
+                <button class="ghost-button" id="clearSearchButton" type="button">清空搜索</button>
+                <button class="secondary-button" id="reloadButton" type="button">刷新</button>
+              </div>
+
+              <div class="license-list" id="licenseList">
+                <div class="empty-state">正在加载授权列表...</div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>查看详情</h3>
+                  <p>输入授权码可以查看激活记录、事件记录和当前状态。</p>
+                </div>
+              </div>
+
+              <form id="detailForm" class="stack-form">
+                <label class="field">
+                  <span>授权码</span>
+                  <input id="detailLicenseKey" type="text" placeholder="NAT-XXXX-XXXX-XXXX-XXXX" required />
+                </label>
+                <button class="secondary-button" type="submit">查看详情</button>
+              </form>
+
+              <div class="detail-card" id="detailCard">
+                <div class="empty-state">还没有选中授权码。</div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>续费旧授权码</h3>
+                  <p>直接延长原来的授权码，不需要重新发新码。</p>
+                </div>
+              </div>
+
+              <form id="renewForm" class="stack-form">
+                <label class="field">
+                  <span>授权码</span>
+                  <input id="renewLicenseKey" type="text" placeholder="NAT-XXXX-XXXX-XXXX-XXXX" required />
+                </label>
+                <label class="field">
+                  <span>续费类型</span>
+                  <select id="renewSku">
+                    <option value="cn_1d">1 天正式版</option>
+                    <option value="cn_1d_promo">推广试用码（1-7 天，不限设备）</option>
+                    <option value="cn_7d">7 天正式版</option>
+                    <option value="cn_30d">30 天正式版</option>
+                    <option value="cn_365d">365 天正式版</option>
+                    <option value="cn_lifetime">永久版</option>
+                  </select>
+                </label>
+                <label class="field promo-field" id="renewPromoDurationField" hidden>
+                  <span>推广天数（1-7）</span>
+                  <input id="renewPromoDuration" type="number" min="1" max="7" value="3" />
+                </label>
+                <button class="secondary-button" type="submit">续费这张授权码</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>换机重置</h3>
+                  <p>客户换电脑时用。可重置整张码，也可只释放一台设备。</p>
+                </div>
+              </div>
+
+              <form id="resetForm" class="stack-form">
+                <label class="field">
+                  <span>授权码</span>
+                  <input id="resetLicenseKey" type="text" placeholder="NAT-XXXX-XXXX-XXXX-XXXX" required />
+                </label>
+                <label class="field">
+                  <span>设备 ID（可留空）</span>
+                  <input id="resetHardwareId" type="text" placeholder="留空表示释放全部设备" />
+                </label>
+                <button class="secondary-button" type="submit">重置激活</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>停用授权</h3>
+                  <p>退款、封禁或停止使用时可以直接停用。</p>
+                </div>
+              </div>
+
+              <form id="revokeForm" class="stack-form">
+                <label class="field">
+                  <span>授权码</span>
+                  <input id="revokeLicenseKey" type="text" placeholder="NAT-XXXX-XXXX-XXXX-XXXX" required />
+                </label>
+                <label class="field">
+                  <span>停用原因</span>
+                  <input id="revokeReason" type="text" placeholder="例如：退款 / 违规 / 人工停用" />
+                </label>
+                <button class="danger-button" type="submit">停用授权</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>立即过期（测试）</h3>
+                  <p>把一张授权码立刻改成已过期，方便你验证软件是否会被拦回授权页。</p>
+                </div>
+              </div>
+
+              <form id="expireForm" class="stack-form">
+                <label class="field">
+                  <span>授权码</span>
+                  <input id="expireLicenseKey" type="text" placeholder="NAT-XXXX-XXXX-XXXX-XXXX" required />
+                </label>
+                <label class="field">
+                  <span>过期备注</span>
+                  <input id="expireReason" type="text" placeholder="例如：过期测试 / 人工结束试用" />
+                </label>
+                <button class="danger-button" type="submit">立即设为过期</button>
+              </form>
+            </section>
+
+            <section class="panel result-panel" id="resultPanel">
+              <div class="panel-head">
+                <div>
+                  <h3>操作结果</h3>
+                  <p>生成授权码后，你可以直接复制并发给客户。</p>
+                </div>
+              </div>
+
+              <div class="result-box" id="resultBox">
+                <div class="empty-state">还没有执行任何操作。</div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+    <script src="/admin/admin.js"></script>
+  </body>
+</html>

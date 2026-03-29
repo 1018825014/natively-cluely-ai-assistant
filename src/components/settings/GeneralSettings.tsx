@@ -12,10 +12,10 @@ type RuntimeLogEntryView = {
 };
 
 export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
-  const [recognitionLanguage, setRecognitionLanguage] = useState("english-us");
+  const [recognitionLanguage, setRecognitionLanguage] = useState("chinese");
   const [availableLanguages, setAvailableLanguages] = useState<Record<string, any>>({});
 
-  const [aiResponseLanguage, setAiResponseLanguage] = useState("English");
+  const [aiResponseLanguage, setAiResponseLanguage] = useState("Chinese");
   const [availableAiLanguages, setAvailableAiLanguages] = useState<any[]>([]);
 
   const [serviceAccountPath, setServiceAccountPath] = useState("");
@@ -65,7 +65,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
           setAvailableLanguages(langs);
 
           const storedStt = await window.electronAPI.getSttLanguage();
-          setRecognitionLanguage(storedStt || "english-us");
+          setRecognitionLanguage(storedStt || "chinese");
         }
 
         if (window.electronAPI?.getAiResponseLanguages) {
@@ -73,7 +73,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
           setAvailableAiLanguages(aiLangs);
 
           const storedAi = await window.electronAPI.getAiResponseLanguage();
-          setAiResponseLanguage(storedAi || "English");
+          setAiResponseLanguage(storedAi || "Chinese");
         }
       } catch (error) {
         console.error("[GeneralSettings] Failed to load language settings:", error);

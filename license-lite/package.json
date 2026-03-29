@@ -1,0 +1,15 @@
+{
+  "name": "natively-license-lite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1"
+  }
+}

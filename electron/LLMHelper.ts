@@ -103,8 +103,8 @@ export class LLMHelper {
   private activeCurlProvider: CurlProvider | null = null;
   private groqFastTextMode: boolean = false;
   private knowledgeOrchestrator: any = null;
-  private aiResponseLanguage: string = 'English';
-  private sttLanguage: string = 'english-us';
+  private aiResponseLanguage: string = 'Chinese';
+  private sttLanguage: string = 'chinese';
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;

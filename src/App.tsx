@@ -10,6 +10,7 @@ import TraceWindow from "./components/TraceWindow"
 import RawTranscriptWindow from "./components/RawTranscriptWindow"
 import SttCompareWindow from "./components/SttCompareWindow"
 import PromptLabWindow from "./components/PromptLabWindow"
+import LicenseGateScreen from "./components/LicenseGateScreen"
 import StartupSequence from "./components/StartupSequence"
 import { AnimatePresence, motion } from "framer-motion"
 import UpdateBanner from "./components/UpdateBanner"
@@ -25,6 +26,7 @@ import {
 } from './premium'
 import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
+import { commercialConfig } from "./config/commercial"
 
 const queryClient = new QueryClient()
 
@@ -91,6 +93,7 @@ const App: React.FC = () => {
   const [settingsInitialTab, setSettingsInitialTab] = useState('general');
   const [showPremiumModal, setShowPremiumModal] = useState(false);
   const [isPremiumActive, setIsPremiumActive] = useState(false);
+  const [licenseStatusResolved, setLicenseStatusResolved] = useState(!commercialConfig.requireLicense);
 
   // Overlay opacity — only meaningful when isOverlayWindow, but stored centrally
   // so it can be initialized once from localStorage and updated via IPC.
@@ -116,7 +119,52 @@ const App: React.FC = () => {
   // Re-index State
   const [incompatibleWarning, setIncompatibleWarning] = useState<{count: number; oldProvider: string; newProvider: string} | null>(null);
   
-  const isAppReady = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !showStartup && !isSettingsOpen && isLauncherMainView;
+  async function refreshLicenseStatus(options?: { preserveActiveOnNetworkError?: boolean }) {
+    if (!commercialConfig.requireLicense) {
+      setIsPremiumActive(true);
+      setLicenseStatusResolved(true);
+      return;
+    }
+
+    try {
+      const payload = await window.electronAPI?.licenseGetStatus?.();
+      if (!payload) {
+        setIsPremiumActive(false);
+        return;
+      }
+
+      const cachedExpiryMs = payload.entitlement?.expiresAt
+        ? new Date(payload.entitlement.expiresAt).getTime()
+        : null;
+      const shouldPreserveCurrent =
+        Boolean(options?.preserveActiveOnNetworkError)
+        && payload.status === 'network_error'
+        && isPremiumActive
+        && (cachedExpiryMs === null || Date.now() <= cachedExpiryMs);
+      const nextPremiumState = shouldPreserveCurrent ? true : Boolean(payload.isPremium);
+
+      setIsPremiumActive(nextPremiumState);
+
+      if (!nextPremiumState && isOverlayWindow) {
+        window.electronAPI?.endMeeting?.().catch(() => {});
+        window.electronAPI?.setWindowMode?.('launcher').catch(() => {});
+      }
+    } catch {
+      if (!options?.preserveActiveOnNetworkError || !isPremiumActive) {
+        setIsPremiumActive(false);
+      }
+    } finally {
+      setLicenseStatusResolved(true);
+    }
+  }
+  
+  const isAppReady = !isSettingsWindow
+    && !isOverlayWindow
+    && !isModelSelectorWindow
+    && !showStartup
+    && !isSettingsOpen
+    && isLauncherMainView
+    && (!commercialConfig.requireLicense || isPremiumActive);
   const { activeAd, dismissAd } = useAdCampaigns(
     isPremiumActive, 
     hasProfile, 
@@ -132,7 +180,10 @@ const App: React.FC = () => {
 
     // Basic status check for campaign targeting
     window.electronAPI?.profileGetStatus?.().then(s => setHasProfile(s?.hasProfile || false)).catch(() => {});
-    window.electronAPI?.licenseCheckPremium?.().then(setIsPremiumActive).catch(() => {});
+    refreshLicenseStatus().catch(() => {
+      setIsPremiumActive(false);
+      setLicenseStatusResolved(true);
+    });
 
     // Listen for meeting processing completion to trigger post-meeting ads
     const removeMeetingsListener = window.electronAPI?.onMeetingsUpdated?.(() => {
@@ -173,6 +224,34 @@ const App: React.FC = () => {
       if (removeWarning) removeWarning();
     }
   }, []);
+
+  useEffect(() => {
+    if (!commercialConfig.requireLicense) {
+      return;
+    }
+
+    const refresh = () => {
+      refreshLicenseStatus({ preserveActiveOnNetworkError: true }).catch(() => {});
+    };
+    const intervalId = window.setInterval(refresh, 60 * 1000);
+    const handleFocus = () => {
+      refresh();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isOverlayWindow, isPremiumActive]);
 
   // Listen for overlay opacity changes — scoped to overlay window only
   useEffect(() => {
@@ -221,6 +300,9 @@ const App: React.FC = () => {
         // Let's explicitly request mode change.
         await window.electronAPI.setWindowMode('overlay');
       } else {
+        if (commercialConfig.requireLicense) {
+          setShowPremiumModal(true);
+        }
         console.error("Failed to start meeting:", result.error);
       }
     } catch (err) {
@@ -368,6 +450,9 @@ const App: React.FC = () => {
 
   // --- LAUNCHER WINDOW (Default) ---
   // Renders if window=launcher OR no param
+  const shouldBlockForLicense = commercialConfig.requireLicense && licenseStatusResolved && !isPremiumActive;
+  const shouldShowLicenseLoading = commercialConfig.requireLicense && !licenseStatusResolved;
+
   return (
     <ErrorBoundary context="Launcher">
     <div className="h-full min-h-0 w-full relative">
@@ -395,25 +480,49 @@ const App: React.FC = () => {
             <QueryClientProvider client={queryClient}>
               <ToastProvider>
                 <div id="launcher-container" className="h-full w-full relative">
-                  <Launcher
-                    onStartMeeting={handleStartMeeting}
-                    onOpenSettings={(tab = 'general') => {
-                      setSettingsInitialTab(tab);
-                      setIsSettingsOpen(true);
-                    }}
-                    onPageChange={setIsLauncherMainView}
-                    ollamaPullStatus={ollamaPullStatus}
-                    ollamaPullPercent={ollamaPullPercent}
-                    ollamaPullMessage={ollamaPullMessage}
-                  />
+                  {shouldShowLicenseLoading ? (
+                    <div className="flex h-full w-full items-center justify-center bg-[#07111f] text-slate-200">
+                      <div className="rounded-[28px] border border-white/10 bg-white/[0.04] px-8 py-6 text-center shadow-[0_32px_100px_rgba(0,0,0,0.35)]">
+                        <div className="text-xs uppercase tracking-[0.24em] text-emerald-200/80">License Check</div>
+                        <div className="mt-3 text-2xl font-semibold text-white">Checking your activation...</div>
+                        <div className="mt-2 text-sm text-slate-300">Please wait a moment.</div>
+                      </div>
+                    </div>
+                  ) : shouldBlockForLicense ? (
+                    <LicenseGateScreen
+                      onActivated={() => {
+                        setIsPremiumActive(true);
+                        setLicenseStatusResolved(true);
+                        setShowPremiumModal(false);
+                        setTimeout(() => {
+                          setSettingsInitialTab('general');
+                          setIsSettingsOpen(true);
+                        }, 300);
+                      }}
+                    />
+                  ) : (
+                    <Launcher
+                      onStartMeeting={handleStartMeeting}
+                      onOpenSettings={(tab = 'general') => {
+                        setSettingsInitialTab(tab);
+                        setIsSettingsOpen(true);
+                      }}
+                      onPageChange={setIsLauncherMainView}
+                      ollamaPullStatus={ollamaPullStatus}
+                      ollamaPullPercent={ollamaPullPercent}
+                      ollamaPullMessage={ollamaPullMessage}
+                    />
+                  )}
                 </div>
-                <SettingsOverlay
-                  isOpen={isSettingsOpen}
-                  onClose={() => {
-                    setIsSettingsOpen(false);
-                  }}
-                  initialTab={settingsInitialTab}
-                />
+                {!shouldBlockForLicense && (
+                  <SettingsOverlay
+                    isOpen={isSettingsOpen}
+                    onClose={() => {
+                      setIsSettingsOpen(false);
+                    }}
+                    initialTab={settingsInitialTab}
+                  />
+                )}
                 <ToastViewport />
               </ToastProvider>
             </QueryClientProvider>
@@ -459,9 +568,9 @@ const App: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <UpdateBanner />
-      <SupportToaster />
-      {isLauncherMainView && !isSettingsOpen && (
+      {!shouldBlockForLicense && <UpdateBanner />}
+      {!shouldBlockForLicense && <SupportToaster />}
+      {isLauncherMainView && !isSettingsOpen && !shouldBlockForLicense && (
         <>
           <ProfileFeatureToaster 
             isOpen={activeAd === 'profile'} 
@@ -498,10 +607,17 @@ const App: React.FC = () => {
 
       <PremiumUpgradeModal
         isOpen={showPremiumModal}
-        onClose={() => setShowPremiumModal(false)}
+        onClose={() => {
+          if (commercialConfig.requireLicense && !isPremiumActive) {
+            return;
+          }
+          setShowPremiumModal(false);
+        }}
         isPremium={isPremiumActive}
+        dismissible={!commercialConfig.requireLicense || isPremiumActive}
         onActivated={() => {
           setIsPremiumActive(true);
+          setLicenseStatusResolved(true);
           setShowPremiumModal(false);
           // After activation, open settings to Profile Intelligence
           setTimeout(() => {
@@ -509,7 +625,13 @@ const App: React.FC = () => {
             setIsSettingsOpen(true);
           }, 300);
         }}
-        onDeactivated={() => setIsPremiumActive(false)}
+        onDeactivated={() => {
+          setIsPremiumActive(false);
+          if (commercialConfig.requireLicense) {
+            setIsSettingsOpen(false);
+            setShowPremiumModal(true);
+          }
+        }}
       />
     </div>
       </ErrorBoundary>

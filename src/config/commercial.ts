@@ -22,6 +22,7 @@ export interface CommercialConfig {
   licenseApiBaseUrl: string;
   updateFeedUrl: string;
   hostedGatewayBaseUrl: string;
+  requireLicense: boolean;
   hostedEnabled: boolean;
   hideByok: boolean;
 }
@@ -75,6 +76,7 @@ export const commercialConfig: CommercialConfig = (() => {
   resolved.activationHelpUrl = trimTrailingSlash(resolved.activationHelpUrl);
   resolved.licenseApiBaseUrl = trimTrailingSlash(resolved.licenseApiBaseUrl);
   resolved.hostedGatewayBaseUrl = trimTrailingSlash(resolved.hostedGatewayBaseUrl || resolved.licenseApiBaseUrl);
+  resolved.requireLicense = parseBooleanEnv(import.meta.env.VITE_NATIVELY_REQUIRE_LICENSE, resolved.requireLicense);
   resolved.hostedEnabled = parseBooleanEnv(import.meta.env.VITE_NATIVELY_HOSTED_ENABLED, resolved.hostedEnabled);
   resolved.hideByok = parseBooleanEnv(import.meta.env.VITE_NATIVELY_HIDE_BYOK, resolved.hideByok);
 

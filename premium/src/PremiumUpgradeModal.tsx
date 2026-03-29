@@ -18,6 +18,7 @@ interface PremiumUpgradeModalProps {
   isPremium: boolean;
   onActivated: () => void;
   onDeactivated: () => void;
+  dismissible?: boolean;
 }
 
 export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({
@@ -26,6 +27,7 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({
   isPremium,
   onActivated,
   onDeactivated,
+  dismissible = true,
 }) => {
   const [licenseKey, setLicenseKey] = useState('');
   const [hardwareId, setHardwareId] = useState('');
@@ -119,7 +121,7 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
+            onClick={dismissible ? onClose : undefined}
           />
 
           <motion.div
@@ -139,12 +141,14 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({
                   中国区第一阶段采用“时长许可证 + 到期手动续购”。购买完成后，通过许可证即可在桌面应用中激活。
                 </p>
               </div>
-              <button
-                onClick={onClose}
-                className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-300 hover:border-white/20 hover:text-white"
-              >
-                关闭
-              </button>
+              {dismissible ? (
+                <button
+                  onClick={onClose}
+                  className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-300 hover:border-white/20 hover:text-white"
+                >
+                  关闭
+                </button>
+              ) : null}
             </div>
 
             <div className="mt-6 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">

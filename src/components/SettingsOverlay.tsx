@@ -685,7 +685,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [languageOptions, setLanguageOptions] = useState<any[]>([]);
 
     // AI Response Language
-    const [aiResponseLanguage, setAiResponseLanguage] = useState('English');
+    const [aiResponseLanguage, setAiResponseLanguage] = useState('Chinese');
     const [availableAiLanguages, setAvailableAiLanguages] = useState<any[]>([]);
 
     // Overlay Opacity state
@@ -828,26 +828,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 const langs = await window.electronAPI.getRecognitionLanguages();
                 setAvailableLanguages(langs);
 
-                // Load stored preference or auto-detect
                 const storedStt = await window.electronAPI.getSttLanguage();
-                let currentLangKey = storedStt;
-
-                if (!currentLangKey) {
-                    const systemLocale = navigator.language;
-                    // Try to find exact match or primary match
-                    const match = Object.entries(langs).find(([_, config]: [string, any]) =>
-                        config.bcp47 === systemLocale ||
-                        config.iso639 === systemLocale ||
-                        (config.alternates && config.alternates.includes(systemLocale))
-                    );
-
-                    currentLangKey = match ? match[0] : 'english-us';
-
-                    // Save the auto-detected default
-                    if (window.electronAPI?.setRecognitionLanguage) {
-                        window.electronAPI.setRecognitionLanguage(currentLangKey);
-                    }
-                }
+                const currentLangKey = storedStt || 'chinese';
 
                 setRecognitionLanguage(currentLangKey);
 
@@ -855,7 +837,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 if (langs[currentLangKey]) {
                     setSelectedSttGroup(langs[currentLangKey].group);
                 } else {
-                    setSelectedSttGroup('English');
+                    setSelectedSttGroup('Chinese');
                 }
             }
 
@@ -870,7 +852,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 setAvailableAiLanguages(sortedAiLangs);
 
                 const storedAi = await window.electronAPI.getAiResponseLanguage();
-                setAiResponseLanguage(storedAi || 'English');
+                setAiResponseLanguage(storedAi || 'Chinese');
             }
         };
         loadLanguages();
@@ -3293,31 +3275,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                     placeholder={'agent | 5\ntool calling | 5\nMCP | 5\nRAG | 5\nJava | 5\n线程池 | 5'}
                                                 />
 
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-text-secondary block">阿里云工作区 ID</label>
-                                                        <input
-                                                            type="text"
-                                                            value={alibabaWorkspaceId}
-                                                            onChange={(e) => setAlibabaWorkspaceId(e.target.value)}
-                                                            placeholder="可选，填写 workspace id"
-                                                            className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
-                                                        />
-                                                    </div>
-                                                    <div className="space-y-1.5">
-                                                        <label className="text-xs font-medium text-text-secondary block">阿里云热词表 ID</label>
-                                                        <input
-                                                            type="text"
-                                                            value={alibabaVocabularyId}
-                                                            onChange={(e) => setAlibabaVocabularyId(e.target.value)}
-                                                            placeholder="可选，填写 vocabulary_id"
-                                                            className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
-                                                        />
-                                                    </div>
-                                                </div>
-
                                                 <p className="text-[11px] text-text-tertiary">
-                                                    OpenAI 实时转写会把这份热词表当作提示词使用。阿里云 Paraformer 和 Fun-ASR 会基于同一份热词源数据同步各自模型专属的热词表。
+                                                    OpenAI 实时转写会把这份热词表当作提示词使用。阿里云 Paraformer 和 Fun-ASR 会在保存时自动同步各自模型专属的热词表，客户无需手动填写工作区或热词表 ID。
                                                 </p>
                                                 {glossarySaveMessage && (
                                                     <div className={`rounded-lg border px-3 py-2 text-xs ${glossarySaveTone === 'error'
